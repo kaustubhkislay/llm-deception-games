@@ -1,0 +1,592 @@
+/* LLM Mafia - A dark, mysterious aesthetic */
+
+@import url('https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+    --bg-dark: #0a0a0f;
+    --bg-panel: #12121a;
+    --bg-card: #1a1a24;
+    --bg-hover: #222230;
+    
+    --text-primary: #e8e6e3;
+    --text-secondary: #9d9d9d;
+    --text-muted: #6a6a6a;
+    
+    --accent-red: #c23b3b;
+    --accent-red-dim: #8a2a2a;
+    --accent-green: #3bc246;
+    --accent-blue: #3b8bc2;
+    --accent-gold: #c2a33b;
+    --accent-purple: #8b3bc2;
+    
+    --border-color: #2a2a35;
+    --border-glow: rgba(194, 59, 59, 0.3);
+    
+    --font-display: 'Crimson Pro', Georgia, serif;
+    --font-mono: 'JetBrains Mono', monospace;
+    
+    --radius: 8px;
+    --shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: var(--font-display);
+    font-size: 16px;
+    line-height: 1.6;
+    background: var(--bg-dark);
+    color: var(--text-primary);
+    min-height: 100vh;
+    background-image: 
+        radial-gradient(ellipse at top, rgba(194, 59, 59, 0.05) 0%, transparent 50%),
+        radial-gradient(ellipse at bottom, rgba(59, 139, 194, 0.03) 0%, transparent 50%);
+}
+
+.container {
+    max-width: 1600px;
+    margin: 0 auto;
+    padding: 1rem;
+}
+
+/* Header */
+.game-header, .player-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem 2rem;
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 1.5rem;
+}
+
+h1 {
+    font-size: 2rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--accent-red);
+    text-shadow: 0 0 30px rgba(194, 59, 59, 0.3);
+}
+
+h2 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-secondary);
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+/* Phase Badge */
+.phase-badge {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0.5rem 1.5rem;
+    border-radius: var(--radius);
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+}
+
+.phase-badge .phase-name {
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+}
+
+.phase-badge .day-number {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.phase-night { 
+    border-color: var(--accent-purple);
+    box-shadow: 0 0 15px rgba(139, 59, 194, 0.2);
+}
+.phase-night .phase-name { color: var(--accent-purple); }
+
+.phase-day { 
+    border-color: var(--accent-gold);
+    box-shadow: 0 0 15px rgba(194, 163, 59, 0.2);
+}
+.phase-day .phase-name { color: var(--accent-gold); }
+
+.phase-voting { 
+    border-color: var(--accent-red);
+    box-shadow: 0 0 15px rgba(194, 59, 59, 0.2);
+}
+.phase-voting .phase-name { color: var(--accent-red); }
+
+.phase-game_over { 
+    border-color: var(--accent-green);
+    box-shadow: 0 0 15px rgba(59, 194, 70, 0.2);
+}
+.phase-game_over .phase-name { color: var(--accent-green); }
+
+/* Game Layout */
+.game-layout {
+    display: grid;
+    grid-template-columns: 250px 1fr 300px;
+    gap: 1.5rem;
+    height: calc(100vh - 120px);
+}
+
+/* Panels */
+.players-panel, .chat-panel, .events-panel {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    padding: 1.25rem;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Players List */
+.players-list {
+    list-style: none;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.player-item {
+    margin-bottom: 0.5rem;
+}
+
+.player-link {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    text-decoration: none;
+    color: var(--text-primary);
+    transition: all 0.2s;
+    border: 1px solid transparent;
+}
+
+.player-link:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-color);
+}
+
+.player-item.dead .player-link {
+    opacity: 0.5;
+}
+
+.player-item.dead .player-name {
+    text-decoration: line-through;
+}
+
+.player-name {
+    flex: 1;
+    font-weight: 600;
+}
+
+.player-status {
+    font-size: 0.9rem;
+}
+
+.player-role {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    background: var(--bg-hover);
+    text-transform: uppercase;
+}
+
+.role-mafia { color: var(--accent-red); background: rgba(194, 59, 59, 0.15); }
+.role-doctor { color: var(--accent-green); background: rgba(59, 194, 70, 0.15); }
+.role-detective { color: var(--accent-blue); background: rgba(59, 139, 194, 0.15); }
+.role-town { color: var(--text-secondary); }
+
+/* Chat Messages */
+.chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding-right: 0.5rem;
+}
+
+.chat-placeholder {
+    color: var(--text-muted);
+    text-align: center;
+    padding: 2rem;
+    font-style: italic;
+}
+
+.chat-message {
+    padding: 0.75rem;
+    margin-bottom: 0.5rem;
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    border-left: 3px solid var(--accent-gold);
+}
+
+.msg-time {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-right: 0.5rem;
+}
+
+.msg-sender {
+    font-weight: 600;
+    color: var(--accent-gold);
+    margin-right: 0.5rem;
+}
+
+.msg-content {
+    color: var(--text-primary);
+}
+
+/* Game Log */
+.game-log {
+    flex: 1;
+    overflow-y: auto;
+    padding-right: 0.5rem;
+    margin-bottom: 1.5rem;
+}
+
+.log-entry {
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.35rem;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-start;
+}
+
+.log-time {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.log-entry.log-phase { 
+    background: rgba(194, 163, 59, 0.1);
+    border-left: 2px solid var(--accent-gold);
+}
+
+.log-entry.log-death { 
+    background: rgba(194, 59, 59, 0.1);
+    border-left: 2px solid var(--accent-red);
+    color: var(--accent-red);
+}
+
+.log-entry.log-save { 
+    background: rgba(59, 194, 70, 0.1);
+    border-left: 2px solid var(--accent-green);
+    color: var(--accent-green);
+}
+
+.log-entry.log-night { 
+    background: rgba(139, 59, 194, 0.1);
+    border-left: 2px solid var(--accent-purple);
+    color: var(--accent-purple);
+}
+
+.log-entry.log-vote { 
+    background: rgba(59, 139, 194, 0.1);
+    border-left: 2px solid var(--accent-blue);
+}
+
+.log-entry.log-start { 
+    background: rgba(59, 194, 70, 0.1);
+    border-left: 2px solid var(--accent-green);
+}
+
+.log-entry.log-error { 
+    background: rgba(194, 59, 59, 0.2);
+    color: var(--accent-red);
+}
+
+/* Votes Display */
+.votes-display {
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    padding: 1rem;
+}
+
+.vote-placeholder {
+    color: var(--text-muted);
+    text-align: center;
+    font-style: italic;
+    font-size: 0.9rem;
+}
+
+.vote-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.5rem;
+}
+
+.vote-name {
+    width: 80px;
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.vote-count-bar {
+    height: 8px;
+    background: var(--accent-red);
+    border-radius: 4px;
+    min-width: 10px;
+    transition: width 0.3s;
+}
+
+.vote-count {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+/* Modal */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.modal.hidden {
+    display: none;
+}
+
+.modal-content {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    padding: 2rem 3rem;
+    text-align: center;
+    max-width: 500px;
+    box-shadow: var(--shadow);
+}
+
+.modal-content h2 {
+    font-size: 2rem;
+    border: none;
+    margin-bottom: 1.5rem;
+    color: var(--accent-gold);
+}
+
+.final-roles {
+    margin: 1.5rem 0;
+}
+
+.final-player {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.final-player.dead {
+    opacity: 0.5;
+}
+
+.final-player .player-name {
+    font-weight: 600;
+}
+
+.final-player .player-role {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+}
+
+.final-player .player-status {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+button {
+    background: var(--accent-red);
+    color: white;
+    border: none;
+    padding: 0.75rem 2rem;
+    font-family: var(--font-display);
+    font-size: 1rem;
+    font-weight: 600;
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-top: 1rem;
+}
+
+button:hover {
+    background: var(--accent-red-dim);
+    transform: translateY(-1px);
+}
+
+/* Player Thoughts View */
+.player-layout {
+    height: calc(100vh - 120px);
+}
+
+.player-header .back-link {
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-size: 0.9rem;
+}
+
+.player-header .back-link:hover {
+    color: var(--text-primary);
+}
+
+.thoughts-panel {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    padding: 1.25rem;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.thoughts-container {
+    flex: 1;
+    overflow-y: auto;
+    padding-right: 0.5rem;
+}
+
+.thoughts-placeholder {
+    color: var(--text-muted);
+    text-align: center;
+    padding: 2rem;
+    font-style: italic;
+}
+
+.thought-message {
+    margin-bottom: 1rem;
+    padding: 1rem;
+    border-radius: var(--radius);
+    background: var(--bg-card);
+}
+
+.thought-label {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+    margin-bottom: 0.5rem;
+}
+
+.thought-content {
+    white-space: pre-wrap;
+    font-size: 0.95rem;
+    line-height: 1.5;
+}
+
+.thought-system {
+    border-left: 3px solid var(--accent-purple);
+}
+.thought-system .thought-label { color: var(--accent-purple); }
+
+.thought-user {
+    border-left: 3px solid var(--accent-blue);
+}
+.thought-user .thought-label { color: var(--accent-blue); }
+
+.thought-assistant {
+    border-left: 3px solid var(--accent-gold);
+}
+.thought-assistant .thought-label { color: var(--accent-gold); }
+
+.thought-tool {
+    border-left: 3px solid var(--accent-green);
+    background: rgba(59, 194, 70, 0.05);
+}
+.thought-tool .thought-label { color: var(--accent-green); }
+
+.tool-call {
+    margin-top: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--bg-hover);
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+}
+
+.tool-name {
+    color: var(--accent-gold);
+    font-weight: 500;
+}
+
+.tool-args {
+    color: var(--text-secondary);
+    margin-left: 0.5rem;
+}
+
+.tool-result {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    color: var(--accent-green);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--bg-dark);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+}
+
+/* Responsive */
+@media (max-width: 1200px) {
+    .game-layout {
+        grid-template-columns: 200px 1fr 250px;
+    }
+}
+
+@media (max-width: 900px) {
+    .game-layout {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr auto;
+    }
+    
+    .players-panel {
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+    
+    .players-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+    
+    .player-item {
+        margin: 0;
+    }
+}

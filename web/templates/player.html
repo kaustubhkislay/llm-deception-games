@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+
+{% block title %}{{ player_name }} - LLM Mafia{% endblock %}
+
+{% block content %}
+<header class="player-header">
+    <a href="/" class="back-link">← Back to Game</a>
+    <h1>{{ player_name }}'s Mind</h1>
+    <div id="phase-indicator" class="phase-badge phase-unknown">
+        <span class="phase-name">Loading...</span>
+    </div>
+</header>
+
+<main class="player-layout">
+    <section class="thoughts-panel">
+        <h2>Internal Thoughts</h2>
+        <div id="thoughts-container" class="thoughts-container">
+            <div class="thoughts-placeholder">Loading thoughts...</div>
+        </div>
+    </section>
+</main>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const playerName = "{{ player_name }}";
+const thoughtsContainer = document.getElementById('thoughts-container');
+const phaseIndicator = document.getElementById('phase-indicator');
+const phaseName = phaseIndicator.querySelector('.phase-name');
+
+// Update phase indicator
+function updatePhase(phase) {
+    phaseIndicator.className = `phase-badge phase-${phase.toLowerCase()}`;
+    phaseName.textContent = phase;
+}
+
+// Escape HTML
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Format tool calls
+function formatToolCalls(toolCalls) {
+    if (!toolCalls || toolCalls.length === 0) return '';
+    
+    return toolCalls.map(tc => {
+        const args = JSON.parse(tc.function.arguments);
+        return `<div class="tool-call">
+            <span class="tool-name">${tc.function.name}</span>
+            <span class="tool-args">${JSON.stringify(args)}</span>
+        </div>`;
+    }).join('');
+}
+
+// Add a thought message
+function addThought(thought) {
+    // Remove placeholder if present
+    const placeholder = thoughtsContainer.querySelector('.thoughts-placeholder');
+    if (placeholder) placeholder.remove();
+    
+    const msgEl = document.createElement('div');
+    msgEl.className = `thought-message thought-${thought.role}`;
+    
+    let content = '';
+    if (thought.role === 'system') {
+        content = `
+            <div class="thought-label">System Prompt</div>
+            <div class="thought-content">${escapeHtml(thought.content)}</div>
+        `;
+    } else if (thought.role === 'user') {
+        content = `
+            <div class="thought-label">Game Update</div>
+            <div class="thought-content">${escapeHtml(thought.content)}</div>
+        `;
+    } else if (thought.role === 'assistant') {
+        content = `
+            <div class="thought-label">Thinking</div>
+            <div class="thought-content">${thought.content ? escapeHtml(thought.content) : '<em>No verbal response</em>'}</div>
+            ${formatToolCalls(thought.tool_calls)}
+        `;
+    } else if (thought.role === 'tool') {
+        content = `
+            <div class="thought-label">Tool Result</div>
+            <div class="thought-content tool-result">${escapeHtml(thought.content)}</div>
+        `;
+    }
+    
+    msgEl.innerHTML = content;
+    thoughtsContainer.appendChild(msgEl);
+    thoughtsContainer.scrollTop = thoughtsContainer.scrollHeight;
+}
+
+// Handle SSE events
+function handleEvent(event) {
+    const data = JSON.parse(event.data);
+    console.log('Event:', data);
+    
+    switch (data.event_type) {
+        case 'INITIAL_THOUGHTS':
+            // Clear and load initial thoughts
+            thoughtsContainer.innerHTML = '';
+            data.data.thoughts.forEach(addThought);
+            break;
+            
+        case 'PHASE_CHANGE':
+            updatePhase(data.data.phase);
+            break;
+            
+        case 'PLAYER_THOUGHT':
+            if (data.data.player_name === playerName) {
+                // Add the prompt as user message
+                addThought({role: 'user', content: data.data.prompt});
+                // Add the response as assistant message
+                addThought({
+                    role: 'assistant', 
+                    content: data.data.response,
+                    tool_calls: data.data.tool_calls
+                });
+            }
+            break;
+            
+        case 'GAME_END':
+            addThought({role: 'user', content: `Game Over! ${data.data.winner} wins!`});
+            break;
+    }
+}
+
+// Connect to SSE
+const evtSource = new EventSource(`/player/${playerName}/events`);
+evtSource.onmessage = handleEvent;
+evtSource.onerror = function(e) {
+    console.error('SSE error:', e);
+};
+
+// Initial load
+fetch(`/api/player/${playerName}/thoughts`)
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) {
+            thoughtsContainer.innerHTML = '<div class="error">Player not found</div>';
+        } else {
+            thoughtsContainer.innerHTML = '';
+            data.thoughts.forEach(addThought);
+        }
+    })
+    .catch(e => {
+        console.error('Initial load error:', e);
+        thoughtsContainer.innerHTML = '<div class="thoughts-placeholder">Waiting for game...</div>';
+    });
+</script>
+{% endblock %}

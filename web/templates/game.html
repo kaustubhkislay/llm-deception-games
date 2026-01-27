@@ -1,0 +1,275 @@
+{% extends "base.html" %}
+
+{% block title %}LLM Mafia - Live Game{% endblock %}
+
+{% block content %}
+<header class="game-header">
+    <h1>LLM Mafia</h1>
+    <div id="phase-indicator" class="phase-badge phase-unknown">
+        <span class="phase-name">Loading...</span>
+        <span class="day-number"></span>
+    </div>
+</header>
+
+<main class="game-layout">
+    <!-- Players Panel -->
+    <aside class="players-panel">
+        <h2>Players</h2>
+        <ul id="players-list" class="players-list">
+            <!-- Populated by JS -->
+        </ul>
+    </aside>
+
+    <!-- Main Chat Area -->
+    <section class="chat-panel">
+        <h2>Town Square</h2>
+        <div id="chat-messages" class="chat-messages">
+            <div class="chat-placeholder">Waiting for game to start...</div>
+        </div>
+    </section>
+
+    <!-- Events / Night Log Panel -->
+    <aside class="events-panel">
+        <h2>Game Log</h2>
+        <div id="game-log" class="game-log">
+            <!-- Populated by JS -->
+        </div>
+        
+        <h2>Votes</h2>
+        <div id="votes-display" class="votes-display">
+            <div class="vote-placeholder">No active vote</div>
+        </div>
+    </aside>
+</main>
+
+<!-- Game Over Modal -->
+<div id="game-over-modal" class="modal hidden">
+    <div class="modal-content">
+        <h2 id="winner-text">Game Over</h2>
+        <div id="final-roles" class="final-roles"></div>
+        <button onclick="location.reload()">New Game</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Game state
+let gameState = {
+    phase: 'UNKNOWN',
+    dayNumber: 0,
+    players: [],
+    messages: [],
+    votes: {},
+    winner: null
+};
+
+// DOM elements
+const phaseIndicator = document.getElementById('phase-indicator');
+const phaseName = phaseIndicator.querySelector('.phase-name');
+const dayNumber = phaseIndicator.querySelector('.day-number');
+const playersList = document.getElementById('players-list');
+const chatMessages = document.getElementById('chat-messages');
+const gameLog = document.getElementById('game-log');
+const votesDisplay = document.getElementById('votes-display');
+const gameOverModal = document.getElementById('game-over-modal');
+const winnerText = document.getElementById('winner-text');
+const finalRoles = document.getElementById('final-roles');
+
+// Update phase indicator
+function updatePhase(phase, day) {
+    phaseIndicator.className = `phase-badge phase-${phase.toLowerCase()}`;
+    phaseName.textContent = phase;
+    if (day) {
+        dayNumber.textContent = `Day ${day}`;
+    }
+}
+
+// Update players list
+function updatePlayers(players) {
+    playersList.innerHTML = players.map(p => `
+        <li class="player-item ${p.is_alive ? 'alive' : 'dead'}">
+            <a href="/player/${p.name}" target="_blank" class="player-link">
+                <span class="player-name">${p.name}</span>
+                <span class="player-status">${p.is_alive ? '🟢' : '💀'}</span>
+                ${p.role ? `<span class="player-role">${p.role}</span>` : ''}
+            </a>
+        </li>
+    `).join('');
+}
+
+// Add a chat message
+function addChatMessage(msg) {
+    // Remove placeholder if present
+    const placeholder = chatMessages.querySelector('.chat-placeholder');
+    if (placeholder) placeholder.remove();
+    
+    const time = new Date(msg.timestamp).toLocaleTimeString();
+    const msgEl = document.createElement('div');
+    msgEl.className = 'chat-message';
+    msgEl.innerHTML = `
+        <span class="msg-time">${time}</span>
+        <span class="msg-sender">${msg.sender}:</span>
+        <span class="msg-content">${escapeHtml(msg.content)}</span>
+    `;
+    chatMessages.appendChild(msgEl);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// Add a game log entry
+function addLogEntry(text, type = 'info') {
+    const entry = document.createElement('div');
+    entry.className = `log-entry log-${type}`;
+    entry.innerHTML = `
+        <span class="log-time">${new Date().toLocaleTimeString()}</span>
+        <span class="log-text">${text}</span>
+    `;
+    gameLog.appendChild(entry);
+    gameLog.scrollTop = gameLog.scrollHeight;
+}
+
+// Update votes display
+function updateVotes(votes) {
+    if (Object.keys(votes).length === 0) {
+        votesDisplay.innerHTML = '<div class="vote-placeholder">No votes yet</div>';
+        return;
+    }
+    
+    // Count votes
+    const voteCounts = {};
+    for (const [voter, target] of Object.entries(votes)) {
+        voteCounts[target] = (voteCounts[target] || 0) + 1;
+    }
+    
+    // Sort by vote count
+    const sorted = Object.entries(voteCounts).sort((a, b) => b[1] - a[1]);
+    
+    votesDisplay.innerHTML = sorted.map(([name, count]) => `
+        <div class="vote-bar">
+            <span class="vote-name">${name}</span>
+            <div class="vote-count-bar" style="width: ${count * 20}%"></div>
+            <span class="vote-count">${count}</span>
+        </div>
+    `).join('');
+}
+
+// Show game over
+function showGameOver(winner, players) {
+    winnerText.textContent = `${winner} Wins!`;
+    finalRoles.innerHTML = players.map(p => `
+        <div class="final-player ${p.is_alive ? 'alive' : 'dead'}">
+            <span class="player-name">${p.name}</span>
+            <span class="player-role role-${p.role.toLowerCase()}">${p.role}</span>
+            <span class="player-status">${p.is_alive ? 'Survived' : 'Dead'}</span>
+        </div>
+    `).join('');
+    gameOverModal.classList.remove('hidden');
+}
+
+// Escape HTML
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Handle SSE events
+function handleEvent(event) {
+    const data = JSON.parse(event.data);
+    console.log('Event:', data);
+    
+    switch (data.event_type) {
+        case 'INITIAL_STATE':
+            // Load initial state
+            updatePhase(data.data.phase, data.data.day_number);
+            updatePlayers(data.data.players);
+            data.data.messages.forEach(addChatMessage);
+            updateVotes(data.data.current_votes || {});
+            if (data.data.winner) {
+                showGameOver(data.data.winner, data.data.players);
+            }
+            break;
+            
+        case 'GAME_START':
+            addLogEntry('Game started!', 'start');
+            updatePlayers(data.data.players);
+            break;
+            
+        case 'PHASE_CHANGE':
+            updatePhase(data.data.phase, data.data.day_number);
+            addLogEntry(`Phase: ${data.data.phase} (Day ${data.data.day_number})`, 'phase');
+            if (data.data.phase === 'VOTING') {
+                updateVotes({});  // Clear votes for new voting phase
+            }
+            break;
+            
+        case 'PUBLIC_MESSAGE':
+            addChatMessage(data.data);
+            break;
+            
+        case 'NIGHT_ACTION':
+            addLogEntry(`[SECRET] ${data.data.role}: ${data.data.player} targets ${data.data.target}`, 'night');
+            break;
+            
+        case 'NIGHT_RESULT':
+            if (data.data.killed) {
+                addLogEntry(`${data.data.killed} was killed by the mafia!`, 'death');
+            } else if (data.data.saved) {
+                addLogEntry(`Someone was saved by the doctor!`, 'save');
+            } else {
+                addLogEntry('No one died during the night.', 'info');
+            }
+            break;
+            
+        case 'VOTE_CAST':
+            gameState.votes[data.data.voter] = data.data.target;
+            updateVotes(gameState.votes);
+            addLogEntry(`${data.data.voter} voted for ${data.data.target}`, 'vote');
+            break;
+            
+        case 'VOTE_RESULT':
+            if (data.data.lynched) {
+                addLogEntry(`${data.data.lynched} was lynched! They were ${data.data.lynched_role}.`, 'death');
+            } else if (data.data.was_tie) {
+                addLogEntry('Vote was tied. No one was lynched.', 'info');
+            }
+            gameState.votes = {};
+            break;
+            
+        case 'PLAYER_DEATH':
+            addLogEntry(`${data.data.player} died (${data.data.cause})`, 'death');
+            // Refresh players list
+            fetch('/api/players')
+                .then(r => r.json())
+                .then(d => updatePlayers(d.players));
+            break;
+            
+        case 'GAME_END':
+            showGameOver(data.data.winner, data.data.players);
+            break;
+    }
+}
+
+// Connect to SSE
+const evtSource = new EventSource('/events');
+evtSource.onmessage = handleEvent;
+evtSource.onerror = function(e) {
+    console.error('SSE error:', e);
+    addLogEntry('Connection lost. Reconnecting...', 'error');
+};
+
+// Initial load
+fetch('/api/state')
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) {
+            addLogEntry('Waiting for game to start...', 'info');
+        } else {
+            updatePhase(data.phase, data.day_number);
+            updatePlayers(data.players);
+            data.messages.forEach(addChatMessage);
+        }
+    })
+    .catch(e => console.error('Initial load error:', e));
+</script>
+{% endblock %}
