@@ -64,6 +64,21 @@ let gameState = {
     winner: null
 };
 
+// Player colors - consistent colors for each player
+const PLAYER_COLORS = {
+    'Alice': '#e74c3c',    // Red
+    'Bob': '#3498db',      // Blue
+    'Charlie': '#2ecc71',  // Green
+    'Diana': '#9b59b6',    // Purple
+    'Edward': '#f39c12',   // Orange
+    'Fiona': '#1abc9c',    // Teal
+    'George': '#e91e63',   // Pink
+};
+
+function getPlayerColor(name) {
+    return PLAYER_COLORS[name] || '#95a5a6';  // Default gray
+}
+
 // DOM elements
 const phaseIndicator = document.getElementById('phase-indicator');
 const phaseName = phaseIndicator.querySelector('.phase-name');
@@ -89,8 +104,8 @@ function updatePhase(phase, day) {
 function updatePlayers(players) {
     playersList.innerHTML = players.map(p => `
         <li class="player-item ${p.is_alive ? 'alive' : 'dead'}">
-            <a href="/player/${p.name}" target="_blank" class="player-link">
-                <span class="player-name">${p.name}</span>
+            <a href="/player/${p.name}" target="_blank" class="player-link" style="border-left: 4px solid ${getPlayerColor(p.name)}">
+                <span class="player-name" style="color: ${getPlayerColor(p.name)}">${p.name}</span>
                 <span class="player-status">${p.is_alive ? '🟢' : '💀'}</span>
                 ${p.role ? `<span class="player-role">${p.role}</span>` : ''}
             </a>
@@ -105,15 +120,17 @@ function addChatMessage(msg) {
     if (placeholder) placeholder.remove();
     
     const time = new Date(msg.timestamp).toLocaleTimeString();
+    const senderColor = getPlayerColor(msg.sender);
     const msgEl = document.createElement('div');
     msgEl.className = 'chat-message';
+    msgEl.style.borderLeftColor = senderColor;
     msgEl.innerHTML = `
         <span class="msg-time">${time}</span>
-        <span class="msg-sender">${msg.sender}:</span>
+        <span class="msg-sender" style="color: ${senderColor}">${msg.sender}:</span>
         <span class="msg-content">${escapeHtml(msg.content)}</span>
     `;
     chatMessages.appendChild(msgEl);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    // Don't auto-scroll - let user control the view
 }
 
 // Add a game log entry
@@ -125,7 +142,7 @@ function addLogEntry(text, type = 'info') {
         <span class="log-text">${text}</span>
     `;
     gameLog.appendChild(entry);
-    gameLog.scrollTop = gameLog.scrollHeight;
+    // Don't auto-scroll - let user control the view
 }
 
 // Update votes display
@@ -146,8 +163,8 @@ function updateVotes(votes) {
     
     votesDisplay.innerHTML = sorted.map(([name, count]) => `
         <div class="vote-bar">
-            <span class="vote-name">${name}</span>
-            <div class="vote-count-bar" style="width: ${count * 20}%"></div>
+            <span class="vote-name" style="color: ${getPlayerColor(name)}">${name}</span>
+            <div class="vote-count-bar" style="width: ${count * 20}%; background: ${getPlayerColor(name)}"></div>
             <span class="vote-count">${count}</span>
         </div>
     `).join('');

@@ -16,6 +16,10 @@ from .llm_client import (
 from .events import get_broadcaster
 
 
+# Base instruction for reasoning summary
+REASONING_INSTRUCTION = """
+IMPORTANT: Before taking any action, briefly summarize your strategic thinking in 1-2 sentences. Example: "I suspect Bob because he was defensive. I'll push back on Alice's accusation." Then use tools to act."""
+
 # System prompts for each role
 ROLE_SYSTEM_PROMPTS = {
     Role.MAFIA: """You are playing a game of Mafia. You are a MAFIA member.
@@ -29,7 +33,8 @@ Strategy tips:
 - If accused, defend yourself calmly without being defensive
 - Coordinate with your fellow mafia if possible (you know who they are)
 
-Remember: You win when mafia equals or outnumbers town.""",
+Remember: You win when mafia equals or outnumbers town.
+""" + REASONING_INSTRUCTION,
 
     Role.DOCTOR: """You are playing a game of Mafia. You are the DOCTOR.
 
@@ -41,7 +46,8 @@ Strategy tips:
 - Don't reveal your role too early, or mafia will target you
 - Use your reads on the game to decide who to save
 
-Remember: Town wins when all mafia are eliminated.""",
+Remember: Town wins when all mafia are eliminated.
+""" + REASONING_INSTRUCTION,
 
     Role.DETECTIVE: """You are playing a game of Mafia. You are the DETECTIVE.
 
@@ -53,7 +59,8 @@ Strategy tips:
 - Time your reveals strategically to maximize impact
 - If you find a mafia member, build a case against them
 
-Remember: Town wins when all mafia are eliminated.""",
+Remember: Town wins when all mafia are eliminated.
+""" + REASONING_INSTRUCTION,
 
     Role.TOWN: """You are playing a game of Mafia. You are a regular TOWN member.
 
@@ -65,41 +72,77 @@ Strategy tips:
 - Don't be afraid to share your suspicions
 - Work together with other town members
 
-Remember: Town wins when all mafia are eliminated."""
+Remember: Town wins when all mafia are eliminated.
+""" + REASONING_INSTRUCTION
 }
 
 
-def get_day_phase_prompt(player: Player, living_players: list[str], messages_so_far: list[PublicMessage]) -> str:
-    """Generate the prompt for the day discussion phase."""
+def get_day_phase_prompt(
+    player: Player, 
+    living_players: list[str], 
+    messages_so_far: list[PublicMessage],
+    last_seen_count: int = 0,
+    is_first_prompt: bool = True
+) -> str:
+    """Generate the prompt for the day discussion phase.
+    
+    Args:
+        player: The player receiving this prompt
+        living_players: List of living player names
+        messages_so_far: All messages in the chat so far
+        last_seen_count: How many messages the player has already seen
+        is_first_prompt: Whether this is the first prompt of the day phase
+    """
     other_players = [p for p in living_players if p != player.name]
     
-    messages_text = ""
-    if messages_so_far:
-        messages_text = "\n\nRecent messages in the group chat:\n"
-        for msg in messages_so_far[-20:]:  # Show last 20 messages
-            messages_text += f"[{msg.timestamp.strftime('%H:%M:%S')}] {msg.sender_name}: {msg.content}\n"
-    else:
-        messages_text = "\n\nNo messages yet. You may be the first to speak!"
+    # Build XML-structured message view
+    if is_first_prompt:
+        # First prompt of the day - show context and any messages
+        if messages_so_far:
+            messages_xml = "\n<town_square>\n"
+            for msg in messages_so_far:
+                messages_xml += f'  <message sender="{msg.sender_name}" time="{msg.timestamp.strftime("%H:%M:%S")}">{msg.content}</message>\n'
+            messages_xml += "</town_square>"
+        else:
+            messages_xml = "\n<town_square>\n  <!-- No messages yet. You may be the first to speak! -->\n</town_square>"
+        
+        return f"""It is now DAYTIME. You have 5 minutes to discuss with the other players.
+
+<game_state>
+  <living_players>{', '.join(living_players)}</living_players>
+  <you>{player.name}</you>
+</game_state>
+{messages_xml}
+
+Briefly summarize your current thinking (1-2 sentences), then use send_message to speak or wait_for_messages to listen."""
     
-    return f"""It is now DAYTIME. You have 5 minutes to discuss with the other players.
+    else:
+        # Subsequent prompt - only show new messages since last seen
+        new_messages = messages_so_far[last_seen_count:]
+        
+        if new_messages:
+            messages_xml = "\n<new_messages>\n"
+            for msg in new_messages:
+                messages_xml += f'  <message sender="{msg.sender_name}" time="{msg.timestamp.strftime("%H:%M:%S")}">{msg.content}</message>\n'
+            messages_xml += "</new_messages>"
+        else:
+            messages_xml = "\n<new_messages>\n  <!-- No new messages -->\n</new_messages>"
+        
+        return f"""Discussion continues. {len(new_messages)} new message(s) since you last checked.
+{messages_xml}
 
-Living players: {', '.join(living_players)}
-Other players you can talk to: {', '.join(other_players)}
-{messages_text}
-
-Use send_message to contribute to the discussion, or wait_for_messages to see what others say before responding. 
-Think about what you want to say and how it will be perceived."""
+Briefly summarize your thinking, then use send_message to speak or wait_for_messages to listen."""
 
 
 def get_voting_phase_prompt(player: Player, living_players: list[str]) -> str:
     """Generate the prompt for the voting phase."""
     other_players = [p for p in living_players if p != player.name]
     
-    return f"""It is now VOTING TIME. You must vote for someone to be lynched.
+    return f"""<phase>VOTING</phase>
 
-Living players you can vote for: {', '.join(other_players)}
+<vote_options>{', '.join(other_players)}</vote_options>
 
-Based on the day's discussion, who do you think is most likely to be mafia? Use cast_vote to submit your vote."""
+Briefly summarize who you suspect and why (1-2 sentences), then use cast_vote to submit your vote."""
 
 
 def get_night_phase_prompt(player: Player, living_players: list[str]) -> str:
@@ -107,29 +150,32 @@ def get_night_phase_prompt(player: Player, living_players: list[str]) -> str:
     other_players = [p for p in living_players if p != player.name]
     
     if player.role == Role.MAFIA:
-        return f"""It is NIGHT. As a mafia member, choose someone to kill.
+        return f"""<phase>NIGHT</phase>
+<your_role>MAFIA</your_role>
+<action>Choose someone to kill</action>
+<targets>{', '.join(other_players)}</targets>
 
-Living players you can target: {', '.join(other_players)}
-
-Use night_action to select your target. Choose wisely - killing power roles (doctor, detective) helps your team."""
+Briefly explain your target choice (1-2 sentences), then use night_action."""
     
     elif player.role == Role.DOCTOR:
-        return f"""It is NIGHT. As the doctor, choose someone to protect from the mafia.
+        return f"""<phase>NIGHT</phase>
+<your_role>DOCTOR</your_role>
+<action>Choose someone to protect</action>
+<targets>{', '.join(living_players)}</targets>
 
-Living players you can save (including yourself): {', '.join(living_players)}
-
-Use night_action to select who to protect. If mafia targets this player, they will survive."""
+Briefly explain who you'll protect and why (1-2 sentences), then use night_action."""
     
     elif player.role == Role.DETECTIVE:
-        return f"""It is NIGHT. As the detective, choose someone to investigate.
+        return f"""<phase>NIGHT</phase>
+<your_role>DETECTIVE</your_role>
+<action>Choose someone to investigate</action>
+<targets>{', '.join(other_players)}</targets>
 
-Living players you can investigate: {', '.join(other_players)}
-
-Use night_action to select your target. You will learn if they are mafia or not."""
+Briefly explain who you'll investigate and why (1-2 sentences), then use night_action."""
     
     else:
         # Town has no night action
-        return "It is NIGHT. As a regular town member, you have no night action. Wait for morning."
+        return "<phase>NIGHT</phase>\nAs a regular town member, you have no night action. Wait for morning."
 
 
 class PlayerAgent:
@@ -233,14 +279,26 @@ class PlayerAgent:
     ) -> None:
         """Run the player's day phase loop."""
         self._running = True
+        last_seen_count = 0
+        is_first_prompt = True
         print(f"[{self.player.name}] Starting day phase")
         
         while self._running and not phase_end_event.is_set():
             # Snapshot current messages
             current_messages = get_messages()
             
-            # Generate prompt with current state
-            prompt = get_day_phase_prompt(self.player, living_players, current_messages)
+            # Generate prompt with current state (only show new messages after first prompt)
+            prompt = get_day_phase_prompt(
+                self.player, 
+                living_players, 
+                current_messages,
+                last_seen_count=last_seen_count,
+                is_first_prompt=is_first_prompt
+            )
+            
+            # Update last seen count BEFORE the LLM call (blind writing)
+            last_seen_count = len(current_messages)
+            is_first_prompt = False
             
             # Call LLM (player is "blind" during this call)
             try:

@@ -38,7 +38,7 @@ def run_flask(port: int):
         print(f"Flask error: {e}")
 
 
-async def run_game(day_duration: int, model: str) -> str:
+async def run_game(day_duration: int, model: str, turn_limit: int | None) -> str:
     """Run the mafia game."""
     # Reset event broadcaster for clean state
     reset_broadcaster()
@@ -49,6 +49,7 @@ async def run_game(day_duration: int, model: str) -> str:
         role_distribution=DEFAULT_ROLE_DISTRIBUTION,
         model=model,
         day_duration_seconds=day_duration,
+        turn_limit=turn_limit,
     )
     
     # Set up web app with game reference
@@ -70,14 +71,25 @@ def main():
     parser.add_argument(
         "--port",
         type=int,
-        default=8080,
-        help="Port for web viewer (default: 8080)"
+        default=9000,
+        help="Port for web viewer (default: 9000)"
     )
     parser.add_argument(
         "--model",
         type=str,
         default="gpt-5-nano",
         help="OpenAI model to use for players (default: gpt-5-nano)"
+    )
+    parser.add_argument(
+        "--turn-limit",
+        type=int,
+        default=None,
+        help="Limit number of turns (night+day+vote = 1 turn). Default: no limit"
+    )
+    parser.add_argument(
+        "--keep-alive",
+        action="store_true",
+        help="Keep web server running after game ends (requires Ctrl+C to exit)"
     )
     args = parser.parse_args()
     
@@ -86,6 +98,7 @@ def main():
     print("=" * 60)
     print(f"Model: {args.model}")
     print(f"Day duration: {args.day_duration} seconds")
+    print(f"Turn limit: {args.turn_limit or 'none'}")
     print(f"Web viewer port: {args.port}")
     print("=" * 60)
     
@@ -104,17 +117,21 @@ def main():
     
     # Run the game
     try:
-        winner = asyncio.run(run_game(args.day_duration, args.model))
+        winner = asyncio.run(run_game(args.day_duration, args.model, args.turn_limit))
         print(f"\n{'=' * 60}")
         print(f"FINAL RESULT: {winner} WINS!")
         print(f"{'=' * 60}")
         
-        # Keep the server running so users can review the game
-        print("\nGame complete. Web viewer will remain active.")
-        print("Press Ctrl+C to exit.")
-        
-        while True:
-            time.sleep(1)
+        if args.keep_alive:
+            # Keep the server running so users can review the game
+            print("\nGame complete. Web viewer will remain active.")
+            print("Press Ctrl+C to exit.")
+            
+            while True:
+                time.sleep(1)
+        else:
+            print("\nGame complete. Exiting.")
+            sys.exit(0)
             
     except KeyboardInterrupt:
         print("\n\nShutting down...")

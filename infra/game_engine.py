@@ -1,8 +1,11 @@
 """Game engine with night/day/voting phases and win conditions."""
 
 import asyncio
+import json
 import random
+import logging
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional
 from collections import Counter
 
@@ -17,6 +20,30 @@ from .player import PlayerAgent
 from .events import get_broadcaster, EventBroadcaster
 
 
+# Set up file-based logging
+LOG_DIR = Path(__file__).parent.parent / "game_logs"
+LOG_DIR.mkdir(exist_ok=True)
+
+
+def setup_game_logger(game_id: str) -> logging.Logger:
+    """Set up a logger for a specific game that writes to a file."""
+    logger = logging.getLogger(f"mafia_game_{game_id}")
+    logger.setLevel(logging.DEBUG)
+    
+    # Clear existing handlers
+    logger.handlers = []
+    
+    # File handler - writes immediately (no buffering)
+    log_file = LOG_DIR / f"game_{game_id}.log"
+    file_handler = logging.FileHandler(log_file, mode='a')
+    file_handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    
+    return logger
+
+
 class MafiaGame:
     """Main game engine for LLM Mafia."""
     
@@ -26,22 +53,28 @@ class MafiaGame:
         role_distribution: list[Role] = DEFAULT_ROLE_DISTRIBUTION,
         model: str = "gpt-5-nano",
         day_duration_seconds: int = DAY_PHASE_DURATION_SECONDS,
+        turn_limit: Optional[int] = None,  # None means no limit
     ):
         assert len(player_names) == len(role_distribution), \
             f"Player count ({len(player_names)}) must match role count ({len(role_distribution)})"
         
+        # Set up game logger
+        self.game_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.logger = setup_game_logger(self.game_id)
+        
         self.model = model
         self.day_duration_seconds = day_duration_seconds
+        self.turn_limit = turn_limit
         self.llm_client = get_llm_client(use_cache=True)
         self.broadcaster = get_broadcaster()
         
-        # Shuffle roles and assign to players
-        shuffled_roles = role_distribution.copy()
-        random.shuffle(shuffled_roles)
+        # Create player-role pairs and shuffle them together for true randomness
+        pairs = list(zip(player_names, role_distribution))
+        random.shuffle(pairs)
         
         self.players: list[Player] = [
             Player(name=name, model=model, role=role)
-            for name, role in zip(player_names, shuffled_roles)
+            for name, role in pairs
         ]
         
         # Initialize game state
@@ -64,6 +97,11 @@ class MafiaGame:
                 send_message_callback=self._send_message,
                 new_message_event=self._new_message_event,
             )
+        
+        # Log game initialization
+        self.logger.info(f"Game {self.game_id} initialized with {len(self.players)} players")
+        for p in self.players:
+            self.logger.info(f"  Player: {p.name} | Role: {p.role.value}")
         
         print(f"Game initialized with {len(self.players)} players:")
         for p in self.players:
@@ -131,24 +169,47 @@ class MafiaGame:
         )
         
         living_names = [p.name for p in self.state.living_players]
+        self.logger.info(f"Night {self.state.day_number} - Living players: {living_names}")
         
-        # Collect night actions from each player with a special role
-        night_actions: dict[Role, Optional[str]] = {}
+        # Collect night actions from each player
+        # Use lists for roles that may have multiple players (mafia)
+        mafia_targets: list[str] = []
+        doctor_target: Optional[str] = None
+        detective_target: Optional[str] = None
         
         for player in self.state.living_players:
-            if player.role in [Role.MAFIA, Role.DOCTOR, Role.DETECTIVE]:
+            if player.role == Role.MAFIA:
                 target = await self.agents[player.name].run_night_phase(living_names)
-                night_actions[player.role] = target
+                if target:
+                    mafia_targets.append(target)
+                self.logger.info(f"  MAFIA {player.name} targets: {target}")
                 
-                # Broadcast night action to viewers
                 await self.broadcaster.broadcast(
                     GameEvent(
                         event_type=EventType.NIGHT_ACTION,
-                        data={
-                            "role": player.role.value,
-                            "player": player.name,
-                            "target": target
-                        }
+                        data={"role": "MAFIA", "player": player.name, "target": target}
+                    )
+                )
+            elif player.role == Role.DOCTOR:
+                target = await self.agents[player.name].run_night_phase(living_names)
+                doctor_target = target
+                self.logger.info(f"  DOCTOR {player.name} protects: {target}")
+                
+                await self.broadcaster.broadcast(
+                    GameEvent(
+                        event_type=EventType.NIGHT_ACTION,
+                        data={"role": "DOCTOR", "player": player.name, "target": target}
+                    )
+                )
+            elif player.role == Role.DETECTIVE:
+                target = await self.agents[player.name].run_night_phase(living_names)
+                detective_target = target
+                self.logger.info(f"  DETECTIVE {player.name} investigates: {target}")
+                
+                await self.broadcaster.broadcast(
+                    GameEvent(
+                        event_type=EventType.NIGHT_ACTION,
+                        data={"role": "DETECTIVE", "player": player.name, "target": target}
                     )
                 )
             else:
@@ -158,48 +219,53 @@ class MafiaGame:
         # Resolve night actions
         result = NightResult()
         
-        # Get mafia kill target (if multiple mafia, they should coordinate - for now just use the last one)
-        mafia_target_name = None
-        for player in self.state.living_players:
-            if player.role == Role.MAFIA and Role.MAFIA in night_actions:
-                mafia_target_name = night_actions.get(Role.MAFIA)
-                break
-        
-        if mafia_target_name:
+        # Mafia kill: use majority vote, or first target if no majority
+        if mafia_targets:
+            target_counts = Counter(mafia_targets)
+            mafia_target_name = target_counts.most_common(1)[0][0]
             result.kill_target = self.state.get_player_by_name(mafia_target_name)
+            self.logger.info(f"  Mafia final target (from {mafia_targets}): {mafia_target_name}")
         
-        # Check if doctor saved the target
-        doctor_target_name = night_actions.get(Role.DOCTOR)
-        if doctor_target_name:
-            result.saved_player = self.state.get_player_by_name(doctor_target_name)
+        # Doctor protection
+        if doctor_target:
+            result.saved_player = self.state.get_player_by_name(doctor_target)
+            self.logger.info(f"  Doctor protected: {doctor_target}")
         
         # Determine if kill succeeds
-        if result.kill_target and result.kill_target != result.saved_player:
-            result.killed_player = result.kill_target
-            result.killed_player.is_alive = False
-            
-            await self.broadcaster.broadcast(
-                GameEvent(
-                    event_type=EventType.PLAYER_DEATH,
-                    data={
-                        "player": result.killed_player.name,
-                        "cause": "killed_by_mafia"
-                    }
+        if result.kill_target:
+            if result.saved_player and result.kill_target.name == result.saved_player.name:
+                # Doctor saved the target!
+                self.logger.info(f"  SAVE! Doctor saved {result.kill_target.name} from mafia!")
+                result.killed_player = None
+            else:
+                # Kill succeeds
+                result.killed_player = result.kill_target
+                result.killed_player.is_alive = False
+                self.logger.info(f"  DEATH! {result.killed_player.name} was killed by mafia")
+                
+                await self.broadcaster.broadcast(
+                    GameEvent(
+                        event_type=EventType.PLAYER_DEATH,
+                        data={
+                            "player": result.killed_player.name,
+                            "cause": "killed_by_mafia",
+                            "was_mafia": result.killed_player.role == Role.MAFIA
+                        }
+                    )
                 )
-            )
         
         # Handle detective investigation
-        detective_target_name = night_actions.get(Role.DETECTIVE)
-        if detective_target_name:
-            target = self.state.get_player_by_name(detective_target_name)
+        if detective_target:
+            target = self.state.get_player_by_name(detective_target)
             if target:
                 is_mafia = target.role == Role.MAFIA
                 result.investigation_result = (target, is_mafia)
+                result_text = "IS MAFIA" if is_mafia else "is NOT mafia"
+                self.logger.info(f"  Investigation result: {target.name} {result_text}")
                 
                 # Tell the detective the result
                 for player in self.state.living_players:
                     if player.role == Role.DETECTIVE:
-                        result_text = "IS MAFIA" if is_mafia else "is NOT mafia"
                         self.agents[player.name].add_game_event(
                             f"Your investigation reveals: {target.name} {result_text}."
                         )
@@ -245,7 +311,8 @@ class MafiaGame:
         
         # Announce night results to all players
         if night_result.killed_player:
-            announcement = f"{night_result.killed_player.name} was killed during the night. They were a {night_result.killed_player.role.value}."
+            alignment = "Mafia" if night_result.killed_player.role == Role.MAFIA else "not Mafia"
+            announcement = f"{night_result.killed_player.name} was killed during the night. They were {alignment}."
         else:
             announcement = "Nobody was killed during the night."
         
@@ -348,7 +415,7 @@ class MafiaGame:
                             data={
                                 "player": lynched_player.name,
                                 "cause": "lynched",
-                                "role": lynched_player.role.value
+                                "was_mafia": lynched_player.role == Role.MAFIA
                             }
                         )
                     )
@@ -367,18 +434,28 @@ class MafiaGame:
                     "votes": votes,
                     "lynched": result.lynched_player.name if result.lynched_player else None,
                     "was_tie": result.was_tie,
-                    "lynched_role": result.lynched_player.role.value if result.lynched_player else None
+                    "lynched_was_mafia": result.lynched_player.role == Role.MAFIA if result.lynched_player else None
                 }
             )
         )
         
         # Announce result to players
         if result.lynched_player:
-            announcement = f"{result.lynched_player.name} was lynched. They were a {result.lynched_player.role.value}."
+            alignment = "Mafia" if result.lynched_player.role == Role.MAFIA else "not Mafia"
+            announcement = f"{result.lynched_player.name} was lynched. They were {alignment}."
         elif result.was_tie:
             announcement = "The vote was tied. Nobody was lynched."
         else:
             announcement = "No valid votes were cast. Nobody was lynched."
+        
+        # Log voting results
+        self.logger.info(f"Voting results: {votes}")
+        if result.lynched_player:
+            self.logger.info(f"  LYNCHED: {result.lynched_player.name} ({result.lynched_player.role.value})")
+        elif result.was_tie:
+            self.logger.info("  TIE - no lynch")
+        else:
+            self.logger.info("  NO VALID VOTES - no lynch")
         
         print(f"\n{announcement}")
         print(f"Votes: {votes}")
@@ -418,7 +495,11 @@ class MafiaGame:
                     f"Your fellow mafia member(s): {', '.join(other_mafia)}"
                 )
         
+        turn_count = 0
         while True:
+            turn_count += 1
+            self.logger.info(f"=== TURN {turn_count} (Day {self.state.day_number}) ===")
+            
             # Night phase
             night_result = await self._run_night_phase()
             
@@ -436,6 +517,12 @@ class MafiaGame:
             # Check win condition after voting
             winner = self._check_win_condition()
             if winner:
+                break
+            
+            # Check turn limit
+            if self.turn_limit and turn_count >= self.turn_limit:
+                self.logger.info(f"Turn limit ({self.turn_limit}) reached, stopping game")
+                winner = "TURN_LIMIT"
                 break
             
             # Increment day counter
@@ -482,7 +569,7 @@ class MafiaGame:
             "phase": self.state.phase.value,
             "day_number": self.state.day_number,
             "players": [
-                {"name": p.name, "is_alive": p.is_alive}
+                {"name": p.name, "role": p.role.value, "is_alive": p.is_alive}
                 for p in self.players
             ],
             "living_players": [p.name for p in self.state.living_players],
