@@ -11,7 +11,8 @@ from .mafia import (
 )
 from .llm_client import (
     CachedLLMClient, get_llm_client, LLMResponse,
-    DAY_TOOLS, VOTING_TOOLS, NIGHT_TOOLS
+    DAY_TOOLS, VOTING_TOOLS, NIGHT_TOOLS,
+    MAFIA_DISCUSSION_TOOLS, MAFIA_VOTE_TOOLS
 )
 from .events import get_broadcaster
 
@@ -40,11 +41,14 @@ Remember: You win when mafia equals or outnumbers town.
 
 Your goal is to help the town win by saving players from the mafia's night kills. Each night, you can choose one player to protect - if the mafia tries to kill them, they will survive.
 
+IMPORTANT RULE: You CANNOT protect the same player two nights in a row. You must choose a different target each night.
+
 Strategy tips:
 - Pay attention to who seems to be a valuable town member
 - Consider protecting yourself sometimes
 - Don't reveal your role too early, or mafia will target you
 - Use your reads on the game to decide who to save
+- Remember who you protected last night - you must choose someone else
 
 Remember: Town wins when all mafia are eliminated.
 """ + REASONING_INSTRUCTION,
@@ -145,7 +149,7 @@ def get_voting_phase_prompt(player: Player, living_players: list[str]) -> str:
 Briefly summarize who you suspect and why (1-2 sentences), then use cast_vote to submit your vote."""
 
 
-def get_night_phase_prompt(player: Player, living_players: list[str]) -> str:
+def get_night_phase_prompt(player: Player, living_players: list[str], last_protected: Optional[str] = None) -> str:
     """Generate the prompt for the night phase based on role."""
     other_players = [p for p in living_players if p != player.name]
     
@@ -158,10 +162,17 @@ def get_night_phase_prompt(player: Player, living_players: list[str]) -> str:
 Briefly explain your target choice (1-2 sentences), then use night_action."""
     
     elif player.role == Role.DOCTOR:
+        # Filter out last protected player (consecutive protection rule)
+        valid_targets = living_players
+        restriction_note = ""
+        if last_protected and last_protected in living_players:
+            valid_targets = [p for p in living_players if p != last_protected]
+            restriction_note = f"\n<restriction>You protected {last_protected} last night. You CANNOT protect them again tonight.</restriction>"
+        
         return f"""<phase>NIGHT</phase>
 <your_role>DOCTOR</your_role>
 <action>Choose someone to protect</action>
-<targets>{', '.join(living_players)}</targets>
+<targets>{', '.join(valid_targets)}</targets>{restriction_note}
 
 Briefly explain who you'll protect and why (1-2 sentences), then use night_action."""
     
@@ -196,6 +207,13 @@ class PlayerAgent:
         self.new_message_event = new_message_event
         self._last_seen_message_id: Optional[str] = None
         self._running = False
+        
+        # Track last protected player (for doctor's consecutive protection rule)
+        self._last_protected: Optional[str] = None
+        
+        # Mafia coordination callbacks (set during mafia phase)
+        self._mafia_send_callback: Optional[Callable[[str, str], Awaitable[None]]] = None
+        self._mafia_message_event: Optional[asyncio.Event] = None
         
         # Initialize chat history with system prompt
         self.player.chat_history = [
@@ -267,6 +285,16 @@ class PlayerAgent:
         elif func_name == "night_action":
             target = args["target"]
             return f"NIGHT_ACTION:{target}"  # Special return value for night action
+        
+        elif func_name == "mafia_chat":
+            content = args["content"]
+            if self._mafia_send_callback:
+                await self._mafia_send_callback(self.player.name, content)
+            return f"Mafia message sent: {content}"
+        
+        elif func_name == "mafia_kill_vote":
+            target = args["target"]
+            return f"MAFIA_VOTE:{target}"  # Special return value for mafia kill vote
         
         else:
             return f"Unknown tool: {func_name}"
@@ -376,7 +404,9 @@ class PlayerAgent:
             ))
             return None
         
-        prompt = get_night_phase_prompt(self.player, living_players)
+        # Pass last_protected to doctor's prompt
+        last_protected = self._last_protected if self.player.role == Role.DOCTOR else None
+        prompt = get_night_phase_prompt(self.player, living_players, last_protected)
         response = await self._call_llm(prompt, NIGHT_TOOLS)
         
         if response.tool_calls:
@@ -393,6 +423,11 @@ class PlayerAgent:
                 if result.startswith("NIGHT_ACTION:"):
                     target = result[13:]
                     print(f"[{self.player.name}] Night action target: {target}")
+                    
+                    # Update last protected for doctor
+                    if self.player.role == Role.DOCTOR:
+                        self._last_protected = target
+                    
                     return target
         
         print(f"[{self.player.name}] No night action taken")
@@ -404,6 +439,110 @@ class PlayerAgent:
             role="user",
             content=f"[GAME EVENT] {event_description}"
         ))
+    
+    def set_mafia_callbacks(
+        self,
+        send_callback: Callable[[str, str], Awaitable[None]],
+        message_event: asyncio.Event
+    ) -> None:
+        """Set the mafia coordination callbacks."""
+        self._mafia_send_callback = send_callback
+        self._mafia_message_event = message_event
+    
+    async def run_mafia_discussion(
+        self,
+        living_players: list[str],
+        other_mafia: list[str],
+        get_mafia_messages: Callable[[], list[dict]],
+        phase_end_event: asyncio.Event,
+    ) -> None:
+        """Run the mafia discussion phase."""
+        self._running = True
+        last_seen_count = 0
+        print(f"[{self.player.name}] Starting mafia discussion")
+        
+        targets = [p for p in living_players if p != self.player.name and p not in other_mafia]
+        
+        while self._running and not phase_end_event.is_set():
+            # Get current mafia messages
+            mafia_messages = get_mafia_messages()
+            new_messages = mafia_messages[last_seen_count:]
+            last_seen_count = len(mafia_messages)
+            
+            # Build prompt
+            messages_xml = ""
+            if new_messages:
+                messages_xml = "\n<new_mafia_messages>\n"
+                for msg in new_messages:
+                    messages_xml += f"  <message sender='{msg['sender']}'>{msg['content']}</message>\n"
+                messages_xml += "</new_mafia_messages>"
+            
+            prompt = f"""<phase>NIGHT - MAFIA COORDINATION</phase>
+<your_team>MAFIA</your_team>
+<teammates>{', '.join(other_mafia) if other_mafia else 'You are the only mafia'}</teammates>
+<potential_targets>{', '.join(targets)}</potential_targets>
+{messages_xml}
+
+Discuss with your mafia partners who to kill tonight. Use mafia_chat to communicate privately, or wait_for_messages to see what your partners say."""
+            
+            try:
+                response = await asyncio.wait_for(
+                    self._call_llm(prompt, MAFIA_DISCUSSION_TOOLS),
+                    timeout=30.0
+                )
+                
+                if response.tool_calls:
+                    for tool_call in response.tool_calls:
+                        result = await self._handle_tool_call(tool_call)
+                        self.player.chat_history.append(ChatMessage(
+                            role="tool",
+                            content=result,
+                            tool_call_id=tool_call["id"]
+                        ))
+                        
+                        if result == "New messages have arrived. Check the chat.":
+                            # Continue discussion loop
+                            continue
+                
+            except asyncio.TimeoutError:
+                print(f"  [{self.player.name}] LLM call timed out, ending discussion")
+                break
+            except asyncio.CancelledError:
+                break
+        
+        self._running = False
+        print(f"[{self.player.name}] Mafia discussion ended")
+    
+    async def run_mafia_vote(self, living_players: list[str], other_mafia: list[str]) -> Optional[str]:
+        """Vote on who the mafia should kill."""
+        print(f"[{self.player.name}] Voting on mafia kill target")
+        
+        targets = [p for p in living_players if p != self.player.name and p not in other_mafia]
+        
+        prompt = f"""<phase>NIGHT - MAFIA KILL VOTE</phase>
+<action>Vote for who to kill</action>
+<targets>{', '.join(targets)}</targets>
+
+The discussion is over. Now vote for who the mafia should kill using mafia_kill_vote."""
+        
+        response = await self._call_llm(prompt, MAFIA_VOTE_TOOLS)
+        
+        if response.tool_calls:
+            for tool_call in response.tool_calls:
+                result = await self._handle_tool_call(tool_call)
+                self.player.chat_history.append(ChatMessage(
+                    role="tool",
+                    content=result,
+                    tool_call_id=tool_call["id"]
+                ))
+                
+                if result.startswith("MAFIA_VOTE:"):
+                    target = result[11:]
+                    print(f"[{self.player.name}] Mafia kill vote: {target}")
+                    return target
+        
+        print(f"[{self.player.name}] No mafia vote cast")
+        return None
     
     def stop(self) -> None:
         """Stop the player's current phase loop."""

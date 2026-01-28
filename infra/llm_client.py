@@ -251,14 +251,55 @@ NIGHT_ACTION_TOOL = {
     }
 }
 
+# Mafia coordination tools
+MAFIA_CHAT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "mafia_chat",
+        "description": "Send a private message to your fellow mafia members. Only other mafia can see this.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "The message to send to your mafia partners"
+                }
+            },
+            "required": ["content"]
+        }
+    }
+}
+
+MAFIA_VOTE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "mafia_kill_vote",
+        "description": "Vote for which player the mafia should kill tonight. You and your fellow mafia members must coordinate on a single target.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": "The name of the player you want the mafia to kill"
+                }
+            },
+            "required": ["target"]
+        }
+    }
+}
+
 # Day phase tools
 DAY_TOOLS = [SEND_MESSAGE_TOOL, WAIT_FOR_MESSAGES_TOOL]
 
 # Voting phase tools
 VOTING_TOOLS = [VOTE_TOOL]
 
-# Night phase tools
+# Night phase tools (for doctor/detective)
 NIGHT_TOOLS = [NIGHT_ACTION_TOOL]
+
+# Mafia coordination tools
+MAFIA_DISCUSSION_TOOLS = [MAFIA_CHAT_TOOL, WAIT_FOR_MESSAGES_TOOL]
+MAFIA_VOTE_TOOLS = [MAFIA_VOTE_TOOL]
 
 
 def get_llm_client(use_cache: bool = True) -> CachedLLMClient:

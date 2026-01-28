@@ -268,6 +268,117 @@ class MafiaGame:
             return "MAFIA"
         return None
     
+    async def _run_mafia_coordination(self, living_names: list[str]) -> Optional[str]:
+        """Run the mafia coordination phase (discussion + vote)."""
+        living_mafia = [p for p in self.state.living_players if p.role == Role.MAFIA]
+        
+        if not living_mafia:
+            return None
+        
+        if len(living_mafia) == 1:
+            # Single mafia - just pick a target directly
+            mafia = living_mafia[0]
+            target = await self.agents[mafia.name].run_night_phase(living_names)
+            if target:
+                self.logger.info(f"  MAFIA {mafia.name} targets: {target}")
+                await self.broadcaster.broadcast(
+                    GameEvent(
+                        event_type=EventType.NIGHT_ACTION,
+                        data={"role": "MAFIA", "player": mafia.name, "target": target}
+                    )
+                )
+                self.event_log.log_event("NIGHT_ACTION", {"role": "MAFIA", "player": mafia.name, "target": target})
+            return target
+        
+        # Multiple mafia - run coordination phase
+        print(f"\n  --- MAFIA COORDINATION ({self.day_duration_seconds // 2}s) ---")
+        self.logger.info(f"  Mafia coordination phase - {len(living_mafia)} mafia members")
+        
+        # Set up mafia chat
+        mafia_messages: list[dict] = []
+        mafia_message_event = asyncio.Event()
+        
+        async def send_mafia_message(sender: str, content: str) -> None:
+            msg = {"sender": sender, "content": content, "timestamp": datetime.now().isoformat()}
+            mafia_messages.append(msg)
+            mafia_message_event.set()
+            mafia_message_event.clear()
+            print(f"    [MAFIA CHAT] {sender}: {content}")
+            self.logger.info(f"    MAFIA CHAT: {sender}: {content}")
+        
+        def get_mafia_messages() -> list[dict]:
+            return mafia_messages.copy()
+        
+        # Set up callbacks for each mafia member
+        mafia_names = [p.name for p in living_mafia]
+        for mafia in living_mafia:
+            other_mafia = [n for n in mafia_names if n != mafia.name]
+            self.agents[mafia.name].set_mafia_callbacks(send_mafia_message, mafia_message_event)
+        
+        # Run discussion phase (half day duration)
+        discussion_duration = self.day_duration_seconds // 2
+        phase_end_event = asyncio.Event()
+        
+        # Start all mafia discussion tasks
+        discussion_tasks = []
+        for mafia in living_mafia:
+            other_mafia = [n for n in mafia_names if n != mafia.name]
+            task = asyncio.create_task(
+                self.agents[mafia.name].run_mafia_discussion(
+                    living_names, other_mafia, get_mafia_messages, phase_end_event
+                )
+            )
+            discussion_tasks.append(task)
+        
+        # Wait for discussion duration
+        await asyncio.sleep(discussion_duration)
+        phase_end_event.set()
+        mafia_message_event.set()  # Wake up any waiting mafia
+        
+        # Cancel discussion tasks
+        for task in discussion_tasks:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        
+        print(f"  --- MAFIA VOTING ---")
+        
+        # Collect votes
+        mafia_votes: list[str] = []
+        for mafia in living_mafia:
+            other_mafia = [n for n in mafia_names if n != mafia.name]
+            vote = await self.agents[mafia.name].run_mafia_vote(living_names, other_mafia)
+            if vote:
+                mafia_votes.append(vote)
+                self.logger.info(f"  MAFIA {mafia.name} votes to kill: {vote}")
+                await self.broadcaster.broadcast(
+                    GameEvent(
+                        event_type=EventType.NIGHT_ACTION,
+                        data={"role": "MAFIA", "player": mafia.name, "target": vote, "action": "kill_vote"}
+                    )
+                )
+                self.event_log.log_event("NIGHT_ACTION", {"role": "MAFIA", "player": mafia.name, "target": vote, "action": "kill_vote"})
+        
+        # Resolve vote - tie means no kill
+        if mafia_votes:
+            vote_counts = Counter(mafia_votes)
+            max_votes = max(vote_counts.values())
+            top_voted = [target for target, count in vote_counts.items() if count == max_votes]
+            
+            if len(top_voted) == 1:
+                # Clear majority - kill the target
+                final_target = top_voted[0]
+                self.logger.info(f"  Mafia final target (votes: {dict(vote_counts)}): {final_target}")
+                return final_target
+            else:
+                # Tie - no kill
+                self.logger.info(f"  Mafia vote tied (votes: {dict(vote_counts)}) - no kill tonight")
+                return None
+        
+        return None
+    
     async def _run_night_phase(self) -> NightResult:
         """Run the night phase."""
         print(f"\n{'='*50}")
@@ -292,28 +403,15 @@ class MafiaGame:
         living_names = [p.name for p in self.state.living_players]
         self.logger.info(f"Night {self.state.day_number} - Living players: {living_names}")
         
-        # Collect night actions from each player
-        # Use lists for roles that may have multiple players (mafia)
-        mafia_targets: list[str] = []
+        # Run mafia coordination first
+        mafia_target_name = await self._run_mafia_coordination(living_names)
+        
+        # Collect other night actions
         doctor_target: Optional[str] = None
         detective_target: Optional[str] = None
         
         for player in self.state.living_players:
-            if player.role == Role.MAFIA:
-                target = await self.agents[player.name].run_night_phase(living_names)
-                if target:
-                    mafia_targets.append(target)
-                self.logger.info(f"  MAFIA {player.name} targets: {target}")
-                
-                await self.broadcaster.broadcast(
-                    GameEvent(
-                        event_type=EventType.NIGHT_ACTION,
-                        data={"role": "MAFIA", "player": player.name, "target": target}
-                    )
-                )
-                self.event_log.log_event("NIGHT_ACTION", {"role": "MAFIA", "player": player.name, "target": target})
-                
-            elif player.role == Role.DOCTOR:
+            if player.role == Role.DOCTOR:
                 target = await self.agents[player.name].run_night_phase(living_names)
                 doctor_target = target
                 self.logger.info(f"  DOCTOR {player.name} protects: {target}")
@@ -338,19 +436,17 @@ class MafiaGame:
                     )
                 )
                 self.event_log.log_event("NIGHT_ACTION", {"role": "DETECTIVE", "player": player.name, "target": target})
-            else:
+            elif player.role == Role.TOWN:
                 # Town members just wait
                 await self.agents[player.name].run_night_phase(living_names)
         
         # Resolve night actions
         result = NightResult()
         
-        # Mafia kill: use majority vote, or first target if no majority
-        if mafia_targets:
-            target_counts = Counter(mafia_targets)
-            mafia_target_name = target_counts.most_common(1)[0][0]
+        # Mafia kill
+        if mafia_target_name:
             result.kill_target = self.state.get_player_by_name(mafia_target_name)
-            self.logger.info(f"  Mafia final target (from {mafia_targets}): {mafia_target_name}")
+            self.logger.info(f"  Mafia final target: {mafia_target_name}")
         
         # Doctor protection
         if doctor_target:
@@ -511,11 +607,11 @@ class MafiaGame:
         
         living_names = [p.name for p in self.state.living_players]
         
-        # Collect votes from all living players
+        # Collect votes from all living players (self-votes are allowed)
         votes: dict[str, str] = {}
         for player in self.state.living_players:
             vote = await self.agents[player.name].run_voting_phase(living_names)
-            if vote and vote in living_names and vote != player.name:
+            if vote and vote in living_names:
                 votes[player.name] = vote
                 self.state.current_votes[player.name] = vote
                 
