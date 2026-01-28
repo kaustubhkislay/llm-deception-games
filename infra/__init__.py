@@ -13,7 +13,7 @@ from .mafia import (
     DEFAULT_ROLE_DISTRIBUTION,
 )
 
-from .game_engine import MafiaGame
+from .game_engine import MafiaGame, load_game_from_log
 from .llm_client import get_llm_client, CachedLLMClient
 from .player import PlayerAgent
 from .events import get_broadcaster, EventBroadcaster
@@ -30,6 +30,7 @@ __all__ = [
     "DEFAULT_PLAYER_NAMES",
     "DEFAULT_ROLE_DISTRIBUTION",
     "MafiaGame",
+    "load_game_from_log",
     "get_llm_client",
     "CachedLLMClient",
     "PlayerAgent",

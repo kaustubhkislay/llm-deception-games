@@ -44,6 +44,109 @@ def setup_game_logger(game_id: str) -> logging.Logger:
     return logger
 
 
+class GameEventLog:
+    """JSON-lines event log for game replay."""
+    
+    def __init__(self, game_id: str):
+        self.game_id = game_id
+        self.log_file = LOG_DIR / f"game_{game_id}.jsonl"
+        self._file = open(self.log_file, 'a')
+    
+    def log_event(self, event_type: str, data: dict) -> None:
+        """Log an event to the JSON lines file."""
+        event = {
+            "timestamp": datetime.now().isoformat(),
+            "event_type": event_type,
+            "data": data
+        }
+        self._file.write(json.dumps(event) + "\n")
+        self._file.flush()
+    
+    def close(self) -> None:
+        """Close the log file."""
+        self._file.close()
+
+
+def load_game_from_log(log_path: str) -> dict:
+    """
+    Load and reconstruct game state from a JSON lines log file.
+    
+    Returns a dict compatible with the web viewer's expected format.
+    """
+    players: dict[str, dict] = {}  # name -> {role, is_alive}
+    messages: list[dict] = []
+    votes: dict[str, str] = {}
+    night_actions: list[dict] = []
+    phase = "GAME_OVER"
+    day_number = 1
+    winner: Optional[str] = None
+    
+    with open(log_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            
+            event = json.loads(line)
+            event_type = event.get("event_type", "")
+            data = event.get("data", {})
+            
+            if event_type == "GAME_INIT":
+                for p in data.get("players", []):
+                    players[p["name"]] = {"role": p["role"], "is_alive": True}
+            
+            elif event_type == "PHASE_CHANGE":
+                phase = data.get("phase", phase)
+                day_number = data.get("day_number", day_number)
+            
+            elif event_type == "NIGHT_ACTION":
+                night_actions.append(data)
+            
+            elif event_type == "PLAYER_DEATH":
+                player_name = data.get("player")
+                if player_name and player_name in players:
+                    players[player_name]["is_alive"] = False
+            
+            elif event_type == "PUBLIC_MESSAGE":
+                messages.append({
+                    "id": data.get("id"),
+                    "sender": data.get("sender"),
+                    "content": data.get("content"),
+                    "timestamp": data.get("timestamp")
+                })
+            
+            elif event_type == "VOTE_CAST":
+                voter = data.get("voter")
+                target = data.get("target")
+                if voter and target:
+                    votes[voter] = target
+            
+            elif event_type == "VOTE_RESULT":
+                votes = data.get("votes", votes)
+            
+            elif event_type == "GAME_END":
+                winner = data.get("winner")
+                phase = "GAME_OVER"
+    
+    # Build final state
+    player_list = [
+        {"name": name, "role": info["role"], "is_alive": info["is_alive"]}
+        for name, info in players.items()
+    ]
+    
+    return {
+        "phase": phase,
+        "day_number": day_number,
+        "players": player_list,
+        "living_players": [p["name"] for p in player_list if p["is_alive"]],
+        "dead_players": [{"name": p["name"], "role": p["role"]} for p in player_list if not p["is_alive"]],
+        "messages": messages,
+        "current_votes": votes,
+        "winner": winner,
+        "night_actions": night_actions,
+    }
+
+
 class MafiaGame:
     """Main game engine for LLM Mafia."""
     
@@ -61,6 +164,7 @@ class MafiaGame:
         # Set up game logger
         self.game_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.logger = setup_game_logger(self.game_id)
+        self.event_log = GameEventLog(self.game_id)
         
         self.model = model
         self.day_duration_seconds = day_duration_seconds
@@ -103,6 +207,12 @@ class MafiaGame:
         for p in self.players:
             self.logger.info(f"  Player: {p.name} | Role: {p.role.value}")
         
+        # JSON event log for replay
+        self.event_log.log_event("GAME_INIT", {
+            "game_id": self.game_id,
+            "players": [{"name": p.name, "role": p.role.value} for p in self.players]
+        })
+        
         print(f"Game initialized with {len(self.players)} players:")
         for p in self.players:
             print(f"  - {p.name}: {p.role.value}")
@@ -132,6 +242,14 @@ class MafiaGame:
                 }
             )
         )
+        
+        # Log for replay
+        self.event_log.log_event("PUBLIC_MESSAGE", {
+            "id": msg.id,
+            "sender": sender_name,
+            "content": content,
+            "timestamp": msg.timestamp.isoformat()
+        })
         
         print(f"  [{msg.timestamp.strftime('%H:%M:%S')}] {sender_name}: {content}")
     
@@ -168,6 +286,9 @@ class MafiaGame:
             )
         )
         
+        # Log for replay
+        self.event_log.log_event("PHASE_CHANGE", {"phase": "NIGHT", "day_number": self.state.day_number})
+        
         living_names = [p.name for p in self.state.living_players]
         self.logger.info(f"Night {self.state.day_number} - Living players: {living_names}")
         
@@ -190,6 +311,8 @@ class MafiaGame:
                         data={"role": "MAFIA", "player": player.name, "target": target}
                     )
                 )
+                self.event_log.log_event("NIGHT_ACTION", {"role": "MAFIA", "player": player.name, "target": target})
+                
             elif player.role == Role.DOCTOR:
                 target = await self.agents[player.name].run_night_phase(living_names)
                 doctor_target = target
@@ -201,6 +324,8 @@ class MafiaGame:
                         data={"role": "DOCTOR", "player": player.name, "target": target}
                     )
                 )
+                self.event_log.log_event("NIGHT_ACTION", {"role": "DOCTOR", "player": player.name, "target": target})
+                
             elif player.role == Role.DETECTIVE:
                 target = await self.agents[player.name].run_night_phase(living_names)
                 detective_target = target
@@ -212,6 +337,7 @@ class MafiaGame:
                         data={"role": "DETECTIVE", "player": player.name, "target": target}
                     )
                 )
+                self.event_log.log_event("NIGHT_ACTION", {"role": "DETECTIVE", "player": player.name, "target": target})
             else:
                 # Town members just wait
                 await self.agents[player.name].run_night_phase(living_names)
@@ -253,6 +379,11 @@ class MafiaGame:
                         }
                     )
                 )
+                self.event_log.log_event("PLAYER_DEATH", {
+                    "player": result.killed_player.name,
+                    "cause": "killed_by_mafia",
+                    "was_mafia": result.killed_player.role == Role.MAFIA
+                })
         
         # Handle detective investigation
         if detective_target:
@@ -308,6 +439,7 @@ class MafiaGame:
                 }
             )
         )
+        self.event_log.log_event("PHASE_CHANGE", {"phase": "DAY", "day_number": self.state.day_number})
         
         # Announce night results to all players
         if night_result.killed_player:
@@ -370,6 +502,7 @@ class MafiaGame:
                 data={"phase": "VOTING", "day_number": self.state.day_number}
             )
         )
+        self.event_log.log_event("PHASE_CHANGE", {"phase": "VOTING", "day_number": self.state.day_number})
         
         # Announce voting phase to all players
         for agent in self.agents.values():
@@ -392,6 +525,7 @@ class MafiaGame:
                         data={"voter": player.name, "target": vote}
                     )
                 )
+                self.event_log.log_event("VOTE_CAST", {"voter": player.name, "target": vote})
         
         # Tally votes
         vote_counts = Counter(votes.values())
@@ -419,6 +553,11 @@ class MafiaGame:
                             }
                         )
                     )
+                    self.event_log.log_event("PLAYER_DEATH", {
+                        "player": lynched_player.name,
+                        "cause": "lynched",
+                        "was_mafia": lynched_player.role == Role.MAFIA
+                    })
             else:
                 # Tie - no lynch
                 result.was_tie = True
@@ -450,6 +589,11 @@ class MafiaGame:
         
         # Log voting results
         self.logger.info(f"Voting results: {votes}")
+        self.event_log.log_event("VOTE_RESULT", {
+            "votes": votes,
+            "lynched": result.lynched_player.name if result.lynched_player else None,
+            "was_tie": result.was_tie
+        })
         if result.lynched_player:
             self.logger.info(f"  LYNCHED: {result.lynched_player.name} ({result.lynched_player.role.value})")
         elif result.was_tie:
@@ -554,6 +698,16 @@ class MafiaGame:
                 }
             )
         )
+        
+        # Log game end for replay
+        self.event_log.log_event("GAME_END", {
+            "winner": winner,
+            "players": [
+                {"name": p.name, "role": p.role.value, "is_alive": p.is_alive}
+                for p in self.players
+            ]
+        })
+        self.event_log.close()
         
         return winner
     

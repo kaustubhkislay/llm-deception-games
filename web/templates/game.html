@@ -43,11 +43,15 @@
 </main>
 
 <!-- Game Over Modal -->
-<div id="game-over-modal" class="modal hidden">
-    <div class="modal-content">
+<div id="game-over-modal" class="modal hidden" onclick="dismissModal(event)">
+    <div class="modal-content" onclick="event.stopPropagation()">
+        <button class="modal-close" onclick="dismissModal()">&times;</button>
         <h2 id="winner-text">Game Over</h2>
         <div id="final-roles" class="final-roles"></div>
-        <button onclick="location.reload()">New Game</button>
+        <div class="modal-buttons">
+            <button onclick="dismissModal()">View Game History</button>
+            <button onclick="location.reload()">New Game</button>
+        </div>
     </div>
 </div>
 {% endblock %}
@@ -181,6 +185,13 @@ function showGameOver(winner, players) {
         </div>
     `).join('');
     gameOverModal.classList.remove('hidden');
+}
+
+// Dismiss the game over modal
+function dismissModal(event) {
+    // If called with event (backdrop click), only close if clicking the backdrop itself
+    if (event && event.target !== gameOverModal) return;
+    gameOverModal.classList.add('hidden');
 }
 
 // Escape HTML
