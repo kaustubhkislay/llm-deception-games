@@ -75,6 +75,10 @@ class CachedLLMClient:
         self.use_cache = use_cache
         self._cache_hits = 0
         self._cache_misses = 0
+        # Token usage tracking
+        self._total_prompt_tokens = 0
+        self._total_completion_tokens = 0
+        self._api_calls = 0
     
     async def chat_completion(
         self,
@@ -139,6 +143,12 @@ class CachedLLMClient:
                 temperature=temperature,
             )
         
+        # Track token usage (only for actual API calls, not cache hits)
+        self._api_calls += 1
+        if response.usage:
+            self._total_prompt_tokens += response.usage.prompt_tokens
+            self._total_completion_tokens += response.usage.completion_tokens
+        
         # Convert to dict for caching
         response_dict = {
             "content": response.choices[0].message.content,
@@ -181,6 +191,43 @@ class CachedLLMClient:
             "misses": float(self._cache_misses),
             "hit_rate": self._cache_hits / max(1, self._cache_hits + self._cache_misses)
         }
+    
+    @property
+    def usage_stats(self) -> dict[str, Any]:
+        """Get token usage statistics."""
+        return {
+            "api_calls": self._api_calls,
+            "prompt_tokens": self._total_prompt_tokens,
+            "completion_tokens": self._total_completion_tokens,
+            "total_tokens": self._total_prompt_tokens + self._total_completion_tokens,
+        }
+    
+    def get_cost_estimate(self, input_price_per_1m: float = 0.0, output_price_per_1m: float = 0.0) -> dict[str, float]:
+        """
+        Estimate API costs based on token usage.
+        
+        Args:
+            input_price_per_1m: Price per 1M input tokens (default: 0 for unknown models)
+            output_price_per_1m: Price per 1M output tokens (default: 0 for unknown models)
+        
+        Returns:
+            Dict with input_cost, output_cost, total_cost
+        """
+        input_cost = (self._total_prompt_tokens / 1_000_000) * input_price_per_1m
+        output_cost = (self._total_completion_tokens / 1_000_000) * output_price_per_1m
+        return {
+            "input_cost": input_cost,
+            "output_cost": output_cost,
+            "total_cost": input_cost + output_cost,
+        }
+    
+    def reset_stats(self) -> None:
+        """Reset all usage statistics."""
+        self._cache_hits = 0
+        self._cache_misses = 0
+        self._total_prompt_tokens = 0
+        self._total_completion_tokens = 0
+        self._api_calls = 0
 
 
 # Tool definitions for players

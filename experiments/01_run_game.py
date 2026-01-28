@@ -38,8 +38,8 @@ def run_flask(port: int):
         print(f"Flask error: {e}")
 
 
-async def run_game(day_duration: int, model: str, turn_limit: int | None) -> str:
-    """Run the mafia game."""
+async def run_game(day_duration: int, model: str, turn_limit: int | None) -> tuple[str, dict]:
+    """Run the mafia game. Returns (winner, usage_stats)."""
     # Reset event broadcaster for clean state
     reset_broadcaster()
     
@@ -57,7 +57,14 @@ async def run_game(day_duration: int, model: str, turn_limit: int | None) -> str
     
     # Run the game
     winner = await game.run_game()
-    return winner
+    
+    # Get usage stats
+    usage_stats = {
+        "usage": game.llm_client.usage_stats,
+        "cache": game.llm_client.cache_stats,
+    }
+    
+    return winner, usage_stats
 
 
 def main():
@@ -117,10 +124,34 @@ def main():
     
     # Run the game
     try:
-        winner = asyncio.run(run_game(args.day_duration, args.model, args.turn_limit))
+        winner, usage_stats = asyncio.run(run_game(args.day_duration, args.model, args.turn_limit))
         print(f"\n{'=' * 60}")
         print(f"FINAL RESULT: {winner} WINS!")
         print(f"{'=' * 60}")
+        
+        # Print usage stats
+        usage = usage_stats["usage"]
+        cache = usage_stats["cache"]
+        
+        # GPT-5-nano pricing (per 1M tokens)
+        INPUT_PRICE = 0.05   # $0.05 per 1M input tokens
+        OUTPUT_PRICE = 0.40  # $0.40 per 1M output tokens
+        
+        input_cost = (usage['prompt_tokens'] / 1_000_000) * INPUT_PRICE
+        output_cost = (usage['completion_tokens'] / 1_000_000) * OUTPUT_PRICE
+        total_cost = input_cost + output_cost
+        
+        print(f"\n📊 API USAGE STATISTICS")
+        print(f"   API calls: {usage['api_calls']}")
+        print(f"   Prompt tokens: {usage['prompt_tokens']:,}")
+        print(f"   Completion tokens: {usage['completion_tokens']:,}")
+        print(f"   Total tokens: {usage['total_tokens']:,}")
+        print(f"\n   Cache hits: {int(cache['hits'])} ({cache['hit_rate']*100:.1f}% hit rate)")
+        print(f"   Cache misses: {int(cache['misses'])}")
+        print(f"\n💰 ESTIMATED COST (gpt-5-nano)")
+        print(f"   Input:  ${input_cost:.4f}")
+        print(f"   Output: ${output_cost:.4f}")
+        print(f"   Total:  ${total_cost:.4f}")
         
         if args.keep_alive:
             # Keep the server running so users can review the game
