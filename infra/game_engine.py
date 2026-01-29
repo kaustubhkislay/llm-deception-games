@@ -71,15 +71,39 @@ def load_game_from_log(log_path: str) -> dict:
     """
     Load and reconstruct game state from a JSON lines log file.
     
-    Returns a dict compatible with the web viewer's expected format.
+    Returns a dict compatible with the web viewer's expected format,
+    including phase_history for timeline navigation.
     """
     players: dict[str, dict] = {}  # name -> {role, is_alive}
     messages: list[dict] = []
     votes: dict[str, str] = {}
     night_actions: list[dict] = []
+    mafia_messages: list[dict] = []
     phase = "GAME_OVER"
     day_number = 1
     winner: Optional[str] = None
+    
+    # Track phase history for timeline
+    phase_history: list[dict] = []
+    current_phase_night_actions: list[dict] = []
+    current_phase_mafia_messages: list[dict] = []
+    
+    def snapshot_players():
+        return [
+            {"name": name, "role": info["role"], "is_alive": info["is_alive"]}
+            for name, info in players.items()
+        ]
+    
+    def save_phase_snapshot(phase_name: str, day_num: int):
+        phase_history.append({
+            "phase": phase_name,
+            "dayNumber": day_num,
+            "players": snapshot_players(),
+            "messagesSnapshot": list(messages),
+            "votesSnapshot": dict(votes),
+            "mafiaMessagesSnapshot": list(current_phase_mafia_messages),
+            "nightActionsSnapshot": list(current_phase_night_actions),
+        })
     
     with open(log_path, 'r') as f:
         for line in f:
@@ -96,43 +120,101 @@ def load_game_from_log(log_path: str) -> dict:
                     players[p["name"]] = {"role": p["role"], "is_alive": True}
             
             elif event_type == "PHASE_CHANGE":
+                # Save snapshot for the phase we're entering
                 phase = data.get("phase", phase)
                 day_number = data.get("day_number", day_number)
+                
+                # Clear phase-specific data when entering new phase
+                if phase == "NIGHT":
+                    current_phase_night_actions = []
+                    current_phase_mafia_messages = []
+                elif phase == "DAY":
+                    votes = {}  # Clear votes for new day
+                elif phase == "VOTING":
+                    votes = {}  # Clear votes for voting phase
+                
+                save_phase_snapshot(phase, day_number)
             
             elif event_type == "NIGHT_ACTION":
-                night_actions.append(data)
+                action_data = {
+                    "role": data.get("role"),
+                    "player": data.get("player"),
+                    "target": data.get("target"),
+                    "action": data.get("action", "")
+                }
+                night_actions.append(action_data)
+                current_phase_night_actions.append(action_data)
+                
+                # Update the last phase snapshot to include this action
+                if phase_history:
+                    phase_history[-1]["nightActionsSnapshot"] = list(current_phase_night_actions)
+            
+            elif event_type == "MAFIA_CHAT":
+                msg_data = {
+                    "sender": data.get("sender"),
+                    "content": data.get("content"),
+                    "timestamp": data.get("timestamp")
+                }
+                mafia_messages.append(msg_data)
+                current_phase_mafia_messages.append(msg_data)
+                
+                # Update the last phase snapshot
+                if phase_history:
+                    phase_history[-1]["mafiaMessagesSnapshot"] = list(current_phase_mafia_messages)
             
             elif event_type == "PLAYER_DEATH":
                 player_name = data.get("player")
                 if player_name and player_name in players:
                     players[player_name]["is_alive"] = False
+                
+                # Update the last phase snapshot with updated player state
+                if phase_history:
+                    phase_history[-1]["players"] = snapshot_players()
             
             elif event_type == "PUBLIC_MESSAGE":
-                messages.append({
+                msg = {
                     "id": data.get("id"),
                     "sender": data.get("sender"),
                     "content": data.get("content"),
                     "timestamp": data.get("timestamp")
-                })
+                }
+                messages.append(msg)
+                
+                # Update the last phase snapshot
+                if phase_history:
+                    phase_history[-1]["messagesSnapshot"] = list(messages)
             
             elif event_type == "VOTE_CAST":
                 voter = data.get("voter")
                 target = data.get("target")
                 if voter and target:
                     votes[voter] = target
+                
+                # Update the last phase snapshot
+                if phase_history:
+                    phase_history[-1]["votesSnapshot"] = dict(votes)
             
             elif event_type == "VOTE_RESULT":
-                votes = data.get("votes", votes)
+                result_votes = data.get("votes", {})
+                votes = result_votes
+                
+                # Update the last phase snapshot
+                if phase_history:
+                    phase_history[-1]["votesSnapshot"] = dict(votes)
             
             elif event_type == "GAME_END":
                 winner = data.get("winner")
-                phase = "GAME_OVER"
+                # Update final player states from game end data
+                for p in data.get("players", []):
+                    if p["name"] in players:
+                        players[p["name"]]["is_alive"] = p["is_alive"]
+                        players[p["name"]]["role"] = p["role"]
+                
+                # Add final GAME_OVER phase
+                save_phase_snapshot("GAME_OVER", day_number)
     
     # Build final state
-    player_list = [
-        {"name": name, "role": info["role"], "is_alive": info["is_alive"]}
-        for name, info in players.items()
-    ]
+    player_list = snapshot_players()
     
     return {
         "phase": phase,
@@ -144,6 +226,7 @@ def load_game_from_log(log_path: str) -> dict:
         "current_votes": votes,
         "winner": winner,
         "night_actions": night_actions,
+        "phase_history": phase_history,
     }
 
 
@@ -305,6 +388,15 @@ class MafiaGame:
             mafia_message_event.clear()
             print(f"    [MAFIA CHAT] {sender}: {content}")
             self.logger.info(f"    MAFIA CHAT: {sender}: {content}")
+            
+            # Broadcast mafia chat to web viewers
+            await self.broadcaster.broadcast(
+                GameEvent(
+                    event_type=EventType.MAFIA_CHAT,
+                    data=msg
+                )
+            )
+            self.event_log.log_event("MAFIA_CHAT", msg)
         
         def get_mafia_messages() -> list[dict]:
             return mafia_messages.copy()
@@ -610,7 +702,7 @@ class MafiaGame:
         # Collect votes from all living players (self-votes are allowed)
         votes: dict[str, str] = {}
         for player in self.state.living_players:
-            vote = await self.agents[player.name].run_voting_phase(living_names)
+            vote = await self.agents[player.name].run_voting_phase(living_names, self.state.public_messages)
             if vote and vote in living_names:
                 votes[player.name] = vote
                 self.state.current_votes[player.name] = vote

@@ -43,40 +43,49 @@ Your goal is to help the town win by saving players from the mafia's night kills
 
 IMPORTANT RULE: You CANNOT protect the same player two nights in a row. You must choose a different target each night.
 
-Strategy tips:
-- Pay attention to who seems to be a valuable town member
-- Consider protecting yourself sometimes
-- Don't reveal your role too early, or mafia will target you
-- Use your reads on the game to decide who to save
-- Remember who you protected last night - you must choose someone else
+CRITICAL STRATEGY:
+- If someone claims to be Detective and reveals a Mafia member, PROTECT THEM! Mafia will try to kill the Detective.
+- Players who are leading town discussion or making strong accusations are likely mafia targets.
+- Don't reveal you're the Doctor unless absolutely necessary - you're a high-value target.
+- If you're protecting yourself, you can't protect others - use this sparingly.
 
-Remember: Town wins when all mafia are eliminated.
+Remember: Town wins when all mafia are eliminated. Keeping the Detective alive is crucial!
 """ + REASONING_INSTRUCTION,
 
     Role.DETECTIVE: """You are playing a game of Mafia. You are the DETECTIVE.
 
 Your goal is to help the town win by investigating players. Each night, you can investigate one player to learn if they are MAFIA or not.
 
-Strategy tips:
-- Investigate players who seem suspicious
-- Be careful about revealing investigation results - mafia will target you
-- Time your reveals strategically to maximize impact
-- If you find a mafia member, build a case against them
+CRITICAL STRATEGY:
+- When you find a Mafia member, SHARE THIS IMMEDIATELY and CLEARLY. Say something like "I am the Detective. I investigated [NAME] and they ARE MAFIA."
+- Repeat your findings multiple times if needed to ensure town hears you.
+- Push hard to get town to vote with you. Coordinate the lynch!
+- Yes, mafia may target you after you reveal, but getting a confirmed mafia lynched is worth the risk.
+- If you find someone is NOT mafia, that's also useful info - share it to build trust.
 
-Remember: Town wins when all mafia are eliminated.
+Investigation strategy:
+- Investigate the most suspicious players first
+- If accused, reveal your role and findings to defend yourself
+
+Remember: Town wins when all mafia are eliminated. Your information is the town's best weapon!
 """ + REASONING_INSTRUCTION,
 
     Role.TOWN: """You are playing a game of Mafia. You are a regular TOWN member.
 
 Your goal is to identify and vote out the mafia members. You have no special abilities, but your vote and voice are powerful tools.
 
-Strategy tips:
+CRITICAL STRATEGY - How to evaluate claims:
+1. DETECTIVE CLAIMS are extremely valuable. If someone claims to be Detective and says they found a Mafia member, this is STRONG EVIDENCE. Follow up on it!
+2. Be suspicious of people who vote AGAINST someone the Detective accused - they might be protecting Mafia.
+3. Mafia will try to discredit the Detective or lynch them. Don't fall for it.
+4. Coordinate votes with other town members - scattered votes let Mafia win.
+
+Other tips:
 - Pay attention to who is being defensive or evasive
 - Look for inconsistencies in people's stories
-- Don't be afraid to share your suspicions
-- Work together with other town members
+- If the Detective found someone, VOTE FOR THAT PERSON unless you have strong contrary evidence
 
-Remember: Town wins when all mafia are eliminated.
+Remember: Town wins when all mafia are eliminated. Coordinated voting is essential!
 """ + REASONING_INSTRUCTION
 }
 
@@ -138,15 +147,26 @@ Briefly summarize your current thinking (1-2 sentences), then use send_message t
 Briefly summarize your thinking, then use send_message to speak or wait_for_messages to listen."""
 
 
-def get_voting_phase_prompt(player: Player, living_players: list[str]) -> str:
+def get_voting_phase_prompt(player: Player, living_players: list[str], messages: Optional[list[PublicMessage]] = None) -> str:
     """Generate the prompt for the voting phase."""
     other_players = [p for p in living_players if p != player.name]
     
-    return f"""<phase>VOTING</phase>
+    # Summarize key claims from discussion
+    claims_summary = ""
+    if messages:
+        claims_summary = "\n<discussion_summary>\n"
+        for msg in messages[-10:]:  # Last 10 messages
+            claims_summary += f"  {msg.sender_name}: {msg.content[:150]}{'...' if len(msg.content) > 150 else ''}\n"
+        claims_summary += "</discussion_summary>\n"
+    
+    return f"""<phase>VOTING - Choose who to lynch</phase>
 
+<living_players>{', '.join(living_players)}</living_players>
 <vote_options>{', '.join(other_players)}</vote_options>
+{claims_summary}
+IMPORTANT: Review what was said during discussion. Did anyone claim to be Detective and identify a Mafia member? If so, strongly consider voting for the accused unless you have good reason not to. Scattered votes help Mafia win!
 
-Briefly summarize who you suspect and why (1-2 sentences), then use cast_vote to submit your vote."""
+Summarize your reasoning (who made accusations? who was accused? what evidence?), then use cast_vote."""
 
 
 def get_night_phase_prompt(player: Player, living_players: list[str], last_protected: Optional[str] = None) -> str:
@@ -362,11 +382,11 @@ class PlayerAgent:
         self._running = False
         print(f"[{self.player.name}] Day phase ended")
     
-    async def run_voting_phase(self, living_players: list[str]) -> Optional[str]:
+    async def run_voting_phase(self, living_players: list[str], messages: Optional[list[PublicMessage]] = None) -> Optional[str]:
         """Run the voting phase and return the player's vote."""
         print(f"[{self.player.name}] Starting voting phase")
         
-        prompt = get_voting_phase_prompt(self.player, living_players)
+        prompt = get_voting_phase_prompt(self.player, living_players, messages)
         response = await self._call_llm(prompt, VOTING_TOOLS)
         
         if response.tool_calls:

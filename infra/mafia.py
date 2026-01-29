@@ -149,6 +149,7 @@ class EventType(Enum):
     PLAYER_DEATH = "PLAYER_DEATH"
     GAME_END = "GAME_END"
     PLAYER_THOUGHT = "PLAYER_THOUGHT"  # For viewing player's internal state
+    MAFIA_CHAT = "MAFIA_CHAT"  # Private mafia communication during night
 
 
 @dataclass

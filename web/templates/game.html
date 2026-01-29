@@ -11,6 +11,13 @@
     </div>
 </header>
 
+<!-- Timeline Navigation -->
+<div class="timeline-container">
+    <div id="timeline" class="timeline">
+        <!-- Populated by JS -->
+    </div>
+</div>
+
 <main class="game-layout">
     <!-- Players Panel -->
     <aside class="players-panel">
@@ -38,6 +45,14 @@
         <h2>Votes</h2>
         <div id="votes-display" class="votes-display">
             <div class="vote-placeholder">No active vote</div>
+        </div>
+        
+        <!-- Mafia Chat (shown during night) -->
+        <div id="mafia-chat-panel" class="mafia-chat-panel" style="display: none;">
+            <h3>🔪 Mafia Private Chat</h3>
+            <div id="mafia-chat-messages" class="mafia-chat-messages">
+                <!-- Populated by JS -->
+            </div>
         </div>
     </aside>
 </main>
@@ -68,6 +83,15 @@ let gameState = {
     winner: null
 };
 
+// Timeline state - stores snapshots at each phase
+let timelineState = {
+    phases: [],          // Array of phase objects
+    currentIndex: -1,    // Currently viewing index (-1 = live)
+    isLive: true,        // Whether we're watching live
+    mafiaMessages: [],   // Mafia chat messages
+    nightActions: []     // Night actions for current phase
+};
+
 // Player colors - consistent colors for each player
 const PLAYER_COLORS = {
     'Alice': '#e74c3c',    // Red
@@ -94,6 +118,177 @@ const votesDisplay = document.getElementById('votes-display');
 const gameOverModal = document.getElementById('game-over-modal');
 const winnerText = document.getElementById('winner-text');
 const finalRoles = document.getElementById('final-roles');
+const timeline = document.getElementById('timeline');
+const mafiaChatPanel = document.getElementById('mafia-chat-panel');
+const mafiaChatMessages = document.getElementById('mafia-chat-messages');
+
+// Phase icons for timeline
+const PHASE_ICONS = {
+    'NIGHT': '🌙',
+    'DAY': '☀️',
+    'VOTING': '🗳️',
+    'GAME_OVER': '🏁'
+};
+
+// Render timeline
+function renderTimeline() {
+    if (timelineState.phases.length === 0) {
+        timeline.innerHTML = '<span style="color: var(--text-muted); font-style: italic;">Game starting...</span>';
+        return;
+    }
+    
+    let html = '';
+    let lastDay = 0;
+    
+    timelineState.phases.forEach((phase, idx) => {
+        // Add day marker when day changes
+        if (phase.dayNumber !== lastDay) {
+            if (idx > 0) html += '<div class="timeline-connector"></div>';
+            html += `<div class="timeline-day-marker">Day ${phase.dayNumber}</div>`;
+            lastDay = phase.dayNumber;
+        } else if (idx > 0) {
+            html += '<div class="timeline-connector"></div>';
+        }
+        
+        const isActive = (timelineState.isLive && idx === timelineState.phases.length - 1) || 
+                        (!timelineState.isLive && idx === timelineState.currentIndex);
+        
+        html += `
+            <div class="timeline-phase phase-${phase.phase.toLowerCase()} ${isActive ? 'active' : ''}" 
+                 onclick="navigateToPhase(${idx})"
+                 title="${phase.phase} - Day ${phase.dayNumber}">
+                <span class="timeline-phase-icon">${PHASE_ICONS[phase.phase] || '❓'}</span>
+                <span class="timeline-phase-label">${phase.phase}</span>
+            </div>
+        `;
+    });
+    
+    // Add "Live" indicator if we're caught up
+    if (timelineState.isLive) {
+        html += '<div class="timeline-connector"></div>';
+        html += `
+            <div class="timeline-phase active" style="background: var(--accent-green); border-radius: 4px;">
+                <span class="timeline-phase-icon">📺</span>
+                <span class="timeline-phase-label" style="color: white;">LIVE</span>
+            </div>
+        `;
+    }
+    
+    timeline.innerHTML = html;
+}
+
+// Navigate to a specific phase in the timeline
+function navigateToPhase(index) {
+    if (index < 0 || index >= timelineState.phases.length) return;
+    
+    timelineState.currentIndex = index;
+    timelineState.isLive = (index === timelineState.phases.length - 1);
+    
+    const snapshot = timelineState.phases[index];
+    
+    // Update UI to show this snapshot
+    updatePhase(snapshot.phase, snapshot.dayNumber);
+    updatePlayers(snapshot.players);
+    
+    // Show messages up to this point
+    chatMessages.innerHTML = '';
+    snapshot.messagesSnapshot.forEach(addChatMessage);
+    
+    // Show votes at this point
+    updateVotes(snapshot.votesSnapshot || {});
+    
+    // Show/hide mafia chat based on phase
+    if (snapshot.phase === 'NIGHT') {
+        showMafiaChat(snapshot.mafiaMessagesSnapshot || [], snapshot.nightActionsSnapshot || []);
+    } else {
+        hideMafiaChat();
+    }
+    
+    renderTimeline();
+}
+
+// Go live (latest state)
+function goLive() {
+    timelineState.isLive = true;
+    timelineState.currentIndex = timelineState.phases.length - 1;
+    navigateToPhase(timelineState.currentIndex);
+}
+
+// Add a phase to the timeline
+function addPhaseToTimeline(phase, dayNum) {
+    // Snapshot current state
+    const snapshot = {
+        phase: phase,
+        dayNumber: dayNum,
+        players: JSON.parse(JSON.stringify(gameState.players)),
+        messagesSnapshot: [...gameState.messages],
+        votesSnapshot: {...gameState.votes},
+        mafiaMessagesSnapshot: [...timelineState.mafiaMessages],
+        nightActionsSnapshot: [...timelineState.nightActions]
+    };
+    
+    timelineState.phases.push(snapshot);
+    
+    // Clear mafia messages and night actions for new phase
+    if (phase !== 'NIGHT') {
+        timelineState.mafiaMessages = [];
+        timelineState.nightActions = [];
+    }
+    
+    if (timelineState.isLive) {
+        timelineState.currentIndex = timelineState.phases.length - 1;
+    }
+    
+    renderTimeline();
+}
+
+// Show mafia chat panel
+function showMafiaChat(messages, nightActions) {
+    mafiaChatPanel.style.display = 'block';
+    
+    let html = '';
+    
+    // Show mafia chat messages
+    if (messages.length > 0) {
+        html += '<div style="margin-bottom: 0.75rem; color: var(--text-muted); font-size: 0.8rem;">Private discussion:</div>';
+        messages.forEach(msg => {
+            html += `
+                <div class="mafia-message">
+                    <span class="msg-sender">${msg.sender}:</span>
+                    <span class="msg-content">${escapeHtml(msg.content)}</span>
+                </div>
+            `;
+        });
+    }
+    
+    // Show night actions
+    if (nightActions.length > 0) {
+        html += '<div style="margin-top: 0.75rem; margin-bottom: 0.5rem; color: var(--text-muted); font-size: 0.8rem;">Night actions:</div>';
+        nightActions.forEach(action => {
+            const actionIcon = action.role === 'MAFIA' ? '🔪' : 
+                              action.role === 'DOCTOR' ? '💉' : 
+                              action.role === 'DETECTIVE' ? '🔍' : '❓';
+            html += `
+                <div class="mafia-message" style="border-color: ${action.role === 'MAFIA' ? 'var(--accent-red)' : 'var(--accent-blue)'};">
+                    <span>${actionIcon}</span>
+                    <span class="msg-sender">${action.player}</span>
+                    <span>→ ${action.target}</span>
+                </div>
+            `;
+        });
+    }
+    
+    if (!html) {
+        html = '<div style="color: var(--text-muted); font-style: italic;">Waiting for night actions...</div>';
+    }
+    
+    mafiaChatMessages.innerHTML = html;
+}
+
+// Hide mafia chat panel
+function hideMafiaChat() {
+    mafiaChatPanel.style.display = 'none';
+}
 
 // Update phase indicator
 function updatePhase(phase, day) {
@@ -208,11 +403,30 @@ function handleEvent(event) {
     
     switch (data.event_type) {
         case 'INITIAL_STATE':
-            // Load initial state
-            updatePhase(data.data.phase, data.data.day_number);
-            updatePlayers(data.data.players);
-            data.data.messages.forEach(addChatMessage);
-            updateVotes(data.data.current_votes || {});
+            // Load initial state (replay mode)
+            gameState.players = data.data.players;
+            gameState.messages = data.data.messages || [];
+            gameState.votes = data.data.current_votes || {};
+            gameState.phase = data.data.phase;
+            gameState.dayNumber = data.data.day_number;
+            
+            // Load timeline from phase_history if available
+            if (data.data.phase_history) {
+                timelineState.phases = data.data.phase_history;
+                timelineState.currentIndex = timelineState.phases.length - 1;
+                timelineState.isLive = false;
+                renderTimeline();
+                // Navigate to the last phase
+                if (timelineState.phases.length > 0) {
+                    navigateToPhase(timelineState.phases.length - 1);
+                }
+            } else {
+                updatePhase(data.data.phase, data.data.day_number);
+                updatePlayers(data.data.players);
+                data.data.messages.forEach(addChatMessage);
+                updateVotes(data.data.current_votes || {});
+            }
+            
             if (data.data.winner) {
                 showGameOver(data.data.winner, data.data.players);
             }
@@ -220,23 +434,54 @@ function handleEvent(event) {
             
         case 'GAME_START':
             addLogEntry('Game started!', 'start');
+            gameState.players = data.data.players;
             updatePlayers(data.data.players);
             break;
             
         case 'PHASE_CHANGE':
-            updatePhase(data.data.phase, data.data.day_number);
-            addLogEntry(`Phase: ${data.data.phase} (Day ${data.data.day_number})`, 'phase');
-            if (data.data.phase === 'VOTING') {
-                updateVotes({});  // Clear votes for new voting phase
+            // Add current phase to timeline before switching
+            addPhaseToTimeline(data.data.phase, data.data.day_number);
+            
+            gameState.phase = data.data.phase;
+            gameState.dayNumber = data.data.day_number;
+            
+            if (timelineState.isLive) {
+                updatePhase(data.data.phase, data.data.day_number);
+                addLogEntry(`Phase: ${data.data.phase} (Day ${data.data.day_number})`, 'phase');
+                
+                if (data.data.phase === 'VOTING') {
+                    gameState.votes = {};
+                    updateVotes({});
+                    hideMafiaChat();
+                } else if (data.data.phase === 'NIGHT') {
+                    showMafiaChat([], []);
+                } else if (data.data.phase === 'DAY') {
+                    hideMafiaChat();
+                }
             }
             break;
             
         case 'PUBLIC_MESSAGE':
-            addChatMessage(data.data);
+            gameState.messages.push(data.data);
+            if (timelineState.isLive) {
+                addChatMessage(data.data);
+            }
             break;
             
         case 'NIGHT_ACTION':
+            timelineState.nightActions.push(data.data);
             addLogEntry(`[SECRET] ${data.data.role}: ${data.data.player} targets ${data.data.target}`, 'night');
+            if (timelineState.isLive && gameState.phase === 'NIGHT') {
+                showMafiaChat(timelineState.mafiaMessages, timelineState.nightActions);
+            }
+            break;
+            
+        case 'MAFIA_CHAT':
+            // Handle mafia private chat messages
+            timelineState.mafiaMessages.push(data.data);
+            if (timelineState.isLive && gameState.phase === 'NIGHT') {
+                showMafiaChat(timelineState.mafiaMessages, timelineState.nightActions);
+            }
             break;
             
         case 'NIGHT_RESULT':
@@ -251,13 +496,15 @@ function handleEvent(event) {
             
         case 'VOTE_CAST':
             gameState.votes[data.data.voter] = data.data.target;
-            updateVotes(gameState.votes);
+            if (timelineState.isLive) {
+                updateVotes(gameState.votes);
+            }
             addLogEntry(`${data.data.voter} voted for ${data.data.target}`, 'vote');
             break;
             
         case 'VOTE_RESULT':
             if (data.data.lynched) {
-                addLogEntry(`${data.data.lynched} was lynched! They were ${data.data.lynched_role}.`, 'death');
+                addLogEntry(`${data.data.lynched} was lynched! They were ${data.data.lynched_role || 'unknown'}.`, 'death');
             } else if (data.data.was_tie) {
                 addLogEntry('Vote was tied. No one was lynched.', 'info');
             }
@@ -266,13 +513,17 @@ function handleEvent(event) {
             
         case 'PLAYER_DEATH':
             addLogEntry(`${data.data.player} died (${data.data.cause})`, 'death');
-            // Refresh players list
-            fetch('/api/players')
-                .then(r => r.json())
-                .then(d => updatePlayers(d.players));
+            // Update player in gameState
+            const deadPlayer = gameState.players.find(p => p.name === data.data.player);
+            if (deadPlayer) deadPlayer.is_alive = false;
+            if (timelineState.isLive) {
+                updatePlayers(gameState.players);
+            }
             break;
             
         case 'GAME_END':
+            addPhaseToTimeline('GAME_OVER', gameState.dayNumber);
+            gameState.players = data.data.players;
             showGameOver(data.data.winner, data.data.players);
             break;
     }

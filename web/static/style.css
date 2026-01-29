@@ -590,6 +590,126 @@ button:hover {
     background: var(--text-muted);
 }
 
+/* Timeline */
+.timeline-container {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+    overflow-x: auto;
+}
+
+.timeline {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    min-width: max-content;
+}
+
+.timeline-phase {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 0.2s;
+    position: relative;
+    min-width: 70px;
+}
+
+.timeline-phase:hover {
+    background: var(--bg-hover);
+}
+
+.timeline-phase.active {
+    background: var(--bg-card);
+    box-shadow: 0 0 10px rgba(194, 163, 59, 0.3);
+}
+
+.timeline-phase.active::after {
+    content: '';
+    position: absolute;
+    bottom: -2px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 60%;
+    height: 2px;
+    background: var(--accent-gold);
+}
+
+.timeline-phase-icon {
+    font-size: 1.2rem;
+    margin-bottom: 0.25rem;
+}
+
+.timeline-phase-label {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+}
+
+.timeline-phase.phase-night .timeline-phase-icon { color: var(--accent-purple); }
+.timeline-phase.phase-day .timeline-phase-icon { color: var(--accent-gold); }
+.timeline-phase.phase-voting .timeline-phase-icon { color: var(--accent-red); }
+.timeline-phase.phase-game_over .timeline-phase-icon { color: var(--accent-green); }
+
+.timeline-connector {
+    width: 20px;
+    height: 2px;
+    background: var(--border-color);
+    flex-shrink: 0;
+}
+
+.timeline-day-marker {
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    color: var(--text-muted);
+    padding: 0.25rem 0.5rem;
+    background: var(--bg-card);
+    border-radius: 4px;
+    margin-right: 0.5rem;
+}
+
+/* Mafia Chat Panel */
+.mafia-chat-panel {
+    background: var(--bg-panel);
+    border: 1px solid var(--accent-purple);
+    border-radius: var(--radius);
+    padding: 1rem;
+    margin-top: 1rem;
+    box-shadow: 0 0 15px rgba(139, 59, 194, 0.15);
+}
+
+.mafia-chat-panel h3 {
+    font-size: 0.9rem;
+    color: var(--accent-purple);
+    margin-bottom: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.mafia-chat-messages {
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.mafia-message {
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.35rem;
+    background: rgba(139, 59, 194, 0.1);
+    border-radius: 4px;
+    border-left: 2px solid var(--accent-purple);
+}
+
+.mafia-message .msg-sender {
+    color: var(--accent-purple);
+}
+
 /* Responsive */
 @media (max-width: 1200px) {
     .game-layout {
