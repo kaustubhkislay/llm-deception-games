@@ -4,10 +4,13 @@
 import asyncio
 import argparse
 import json
+import logging
 import sys
+import traceback
 from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field
+from typing import Optional
 
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -15,18 +18,36 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from infra.game_engine import MafiaGame
 from infra.mafia import Role
 
+# Set up file logging for errors
+LOG_DIR = Path(__file__).parent.parent / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+
+error_logger = logging.getLogger("batch_errors")
+error_logger.setLevel(logging.ERROR)
+
+# Create file handler for errors
+error_log_file = LOG_DIR / f"batch_errors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+file_handler = logging.FileHandler(error_log_file)
+file_handler.setLevel(logging.ERROR)
+file_handler.setFormatter(logging.Formatter(
+    '%(asctime)s | %(levelname)s | %(message)s'
+))
+error_logger.addHandler(file_handler)
+
 
 @dataclass
 class GameResult:
     """Result from a single game."""
     game_id: str
-    winner: str  # "TOWN", "MAFIA", or "TURN_LIMIT"
+    winner: str  # "TOWN", "MAFIA", "TURN_LIMIT", or "ERROR"
     turns: int
     mafia_killed: int
     town_killed: int
     prompt_tokens: int
     completion_tokens: int
     duration_seconds: float
+    error_message: Optional[str] = None
+    error_traceback: Optional[str] = None
 
 
 @dataclass 
@@ -99,18 +120,38 @@ async def run_single_game(
         try:
             winner = await game.run_game()
         except Exception as e:
-            print(f"  ❌ Game {game_id} failed: {e}")
-            import traceback
-            traceback.print_exc()
+            error_msg = str(e)
+            error_tb = traceback.format_exc()
+            
+            # Log to file with full details
+            error_logger.error(
+                f"Game {game_id} (internal ID: {game.game_id}) CRASHED\n"
+                f"Phase: {game.state.phase.value if game.state.phase else 'unknown'}\n"
+                f"Day: {game.state.day_number}\n"
+                f"Living players: {[p.name for p in game.state.living_players]}\n"
+                f"Error: {error_msg}\n"
+                f"Traceback:\n{error_tb}\n"
+                f"{'='*60}"
+            )
+            
+            # Also print to console
+            print(f"  ❌ Game {game_id} failed: {error_msg}")
+            print(f"     See {error_log_file} for details")
+            
+            end_time = datetime.now()
+            duration = (end_time - start_time).total_seconds()
+            
             return GameResult(
                 game_id=game.game_id,
                 winner="ERROR",
-                turns=0,
-                mafia_killed=0,
-                town_killed=0,
-                prompt_tokens=0,
-                completion_tokens=0,
-                duration_seconds=0,
+                turns=game.state.day_number,
+                mafia_killed=sum(1 for p in game.players if p.role == Role.MAFIA and not p.is_alive),
+                town_killed=sum(1 for p in game.players if p.role != Role.MAFIA and not p.is_alive),
+                prompt_tokens=game.llm_client.usage_stats.get("prompt_tokens", 0),
+                completion_tokens=game.llm_client.usage_stats.get("completion_tokens", 0),
+                duration_seconds=duration,
+                error_message=error_msg,
+                error_traceback=error_tb,
             )
         
         end_time = datetime.now()
@@ -151,6 +192,7 @@ async def run_batch(
     print(f"\n{'='*60}")
     print(f"BATCH RUN: {num_games} games (max {parallel} parallel)")
     print(f"Model: {model} | Day: {day_duration}s | Turn limit: {turn_limit}")
+    print(f"Error log: {error_log_file}")
     print(f"{'='*60}\n")
     
     semaphore = asyncio.Semaphore(parallel)
@@ -163,11 +205,35 @@ async def run_batch(
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
     batch_results = BatchResults()
-    for result in results:
+    for i, result in enumerate(results):
         if isinstance(result, GameResult):
             batch_results.games.append(result)
         else:
-            print(f"  ⚠️ Game returned exception: {result}")
+            # This catches exceptions that escaped run_single_game (shouldn't happen)
+            error_msg = str(result)
+            error_tb = "".join(traceback.format_exception(type(result), result, result.__traceback__))
+            
+            error_logger.error(
+                f"Game {i+1} returned raw exception (not caught in run_single_game)\n"
+                f"Error: {error_msg}\n"
+                f"Traceback:\n{error_tb}\n"
+                f"{'='*60}"
+            )
+            
+            print(f"  ⚠️ Game {i+1} returned exception: {error_msg}")
+            
+            batch_results.games.append(GameResult(
+                game_id=f"unknown_{i+1}",
+                winner="ERROR",
+                turns=0,
+                mafia_killed=0,
+                town_killed=0,
+                prompt_tokens=0,
+                completion_tokens=0,
+                duration_seconds=0,
+                error_message=error_msg,
+                error_traceback=error_tb,
+            ))
     
     return batch_results
 
@@ -188,7 +254,7 @@ def print_results(results: BatchResults):
     
     print(f"\n📊 Games: {summary['total_games']} total, {completed} completed")
     if summary["errors"]:
-        print(f"   ⚠️  {summary['errors']} games had errors")
+        print(f"   ⚠️  {summary['errors']} games had errors (see {error_log_file})")
     
     print(f"\n🏆 WIN RATES (of {completed} completed games):")
     print(f"   Town:  {summary['town_wins']:3d} wins ({summary['town_win_rate']*100:5.1f}%)")
@@ -206,7 +272,7 @@ def print_results(results: BatchResults):
     output_cost = (summary["total_completion_tokens"] / 1_000_000) * OUTPUT_PRICE
     total_cost = input_cost + output_cost
     
-    print(f"\n💰 TOTAL COST (gpt-5-mini pricing):")
+    print("\n💰 TOTAL COST (gpt-5-mini pricing):")
     print(f"   Tokens: {summary['total_tokens']:,} ({summary['total_prompt_tokens']:,} in / {summary['total_completion_tokens']:,} out)")
     cost_per_game = total_cost / summary['total_games'] if summary['total_games'] > 0 else 0
     print(f"   Cost:   ${total_cost:.4f} (${cost_per_game:.4f} per game)")
@@ -221,6 +287,7 @@ def print_results(results: BatchResults):
     output = {
         "timestamp": timestamp,
         "summary": summary,
+        "error_log": str(error_log_file),
         "games": [
             {
                 "game_id": g.game_id,
@@ -231,6 +298,8 @@ def print_results(results: BatchResults):
                 "prompt_tokens": g.prompt_tokens,
                 "completion_tokens": g.completion_tokens,
                 "duration_seconds": g.duration_seconds,
+                "error_message": g.error_message,
+                "error_traceback": g.error_traceback,
             }
             for g in results.games
         ]
