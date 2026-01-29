@@ -42,7 +42,7 @@ python experiments/01_run_game.py --help
 Options:
   --day-duration SECONDS  Duration of day phase (default: 300 = 5 minutes)
   --port PORT            Web viewer port (default: 5000)
-  --model MODEL          OpenAI model to use (default: gpt-5-nano)
+  --model MODEL          OpenAI model to use (default: gpt-5-mini)
 ```
 
 ## Architecture

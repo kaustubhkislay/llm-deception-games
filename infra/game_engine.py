@@ -337,7 +337,7 @@ class MafiaGame:
         self,
         player_names: list[str] = DEFAULT_PLAYER_NAMES,
         role_distribution: list[Role] = DEFAULT_ROLE_DISTRIBUTION,
-        model: str = "gpt-5-nano",
+        model: str = "gpt-5-mini",
         day_duration_seconds: int = DAY_PHASE_DURATION_SECONDS,
         turn_limit: Optional[int] = None,  # None means no limit
     ):

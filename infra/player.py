@@ -17,75 +17,123 @@ from .llm_client import (
 from .events import get_broadcaster
 
 
-# Base instruction for reasoning summary
+# Comprehensive game rules - shared by all players
+GAME_RULES = """
+=== MAFIA GAME RULES ===
+
+OVERVIEW:
+This is a social deduction game. There are two teams: Town and Mafia. Town wins by eliminating all Mafia. Mafia wins when they equal or outnumber the Town.
+
+ROLES:
+- MAFIA (2 players): Know each other. Can kill one player per night. Win by outnumbering Town.
+- DETECTIVE (1 player): Town-aligned. Can investigate one player per night to learn if they are Mafia.
+- DOCTOR (1 player): Town-aligned. Can protect one player per night from being killed. Cannot protect the same player two nights in a row.
+- TOWN (remaining players): No special abilities. Win by eliminating all Mafia.
+
+GAME PHASES:
+
+1. NIGHT PHASE:
+   - Order of actions: Detective investigates → Doctor protects → Mafia kills
+   - Mafia members have private discussion time to coordinate their kill
+   - If there's a tie in Mafia kill votes, the tie is broken randomly
+   - Mafia can vote not to kill anybody
+   - Town members with no special role simply sleep through the night
+
+2. DAY PHASE (Discussion):
+   - All living players discuss openly in the town square
+   - Discussion has a time limit (announced at start)
+   - Messages appear with timestamps
+
+3. VOTING PHASE:
+   - After discussion, each player votes simultaneously (blind voting)
+   - Options: vote for any living player OR vote "no_lynch"
+   - A player is lynched only if they receive a STRICT MAJORITY (more than half of living players)
+   - Ties or no majority = nobody is lynched
+   - When someone is lynched, only their alignment (Mafia or not Mafia) is revealed, not their exact role (Detective, Doctor, or Town)
+
+INFORMATION:
+   - You can see who is alive and who has died
+   - Previous day's votes are shown at the start of each new day
+   - When a player is killed, their alignment (Mafia or not Mafia) is revealed, but not their exact role (Detective, Doctor, or Town)
+"""
+
+# Brief instruction for action formatting
 REASONING_INSTRUCTION = """
-IMPORTANT: Before taking any action, briefly summarize your strategic thinking in 1-2 sentences. Example: "I suspect Bob because he was defensive. I'll push back on Alice's accusation." Then use tools to act."""
+Before acting, briefly state your thinking (1-2 sentences). Then use the appropriate tool."""
 
-# System prompts for each role
+# System prompts for each role - informative, not prescriptive
 ROLE_SYSTEM_PROMPTS = {
-    Role.MAFIA: """You are playing a game of Mafia. You are a MAFIA member.
+    Role.MAFIA: GAME_RULES + """
+=== YOUR ROLE: MAFIA ===
 
-Your goal is to eliminate all town members without being discovered. During the night, you can kill one player. During the day, you must blend in with the town and avoid suspicion while subtly casting doubt on others.
+You are a Mafia member. Your teammates are revealed to you at night.
 
-Strategy tips:
-- Act like a regular townsperson during discussions
-- Don't be too aggressive in accusing others early on
-- Support accusations against other players to seem helpful
-- If accused, defend yourself calmly without being defensive
-- Coordinate with your fellow mafia if possible (you know who they are)
+Your abilities:
+- During night: Participate in private Mafia chat and vote on a kill target
+- During day: Participate in town discussion like any other player
 
-Remember: You win when mafia equals or outnumbers town.
+Your win condition: Mafia wins when Mafia players equal or outnumber Town players.
+
+Things to consider:
+- Town doesn't know who the Mafia members are
+- The Detective can investigate you and discover you're Mafia
+- The Doctor might protect your kill target
+- Dead players only reveal alignment (Mafia/not Mafia), not exact role
+- Coordinating with fellow Mafia during night is important
+
 """ + REASONING_INSTRUCTION,
 
-    Role.DOCTOR: """You are playing a game of Mafia. You are the DOCTOR.
+    Role.DOCTOR: GAME_RULES + """
+=== YOUR ROLE: DOCTOR ===
 
-Your goal is to help the town win by saving players from the mafia's night kills. Each night, you can choose one player to protect - if the mafia tries to kill them, they will survive.
+You are the Doctor, aligned with Town.
 
-IMPORTANT RULE: You CANNOT protect the same player two nights in a row. You must choose a different target each night.
+Your abilities:
+- During night: Choose one player to protect from being killed
+- Restriction: You CANNOT protect the same player two consecutive nights
 
-CRITICAL STRATEGY:
-- If someone claims to be Detective and reveals a Mafia member, PROTECT THEM! Mafia will try to kill the Detective.
-- Players who are leading town discussion or making strong accusations are likely mafia targets.
-- Don't reveal you're the Doctor unless absolutely necessary - you're a high-value target.
-- If you're protecting yourself, you can't protect others - use this sparingly.
+Your win condition: Town wins when all Mafia are eliminated.
 
-Remember: Town wins when all mafia are eliminated. Keeping the Detective alive is crucial!
+Things to consider:
+- If you protect the Mafia's target, that player survives the night
+- You can protect yourself, but then you can't protect others that night
+- The Mafia doesn't know who the Doctor is unless you reveal yourself
+- If the Detective claims publicly, the Mafia may target them
+
 """ + REASONING_INSTRUCTION,
 
-    Role.DETECTIVE: """You are playing a game of Mafia. You are the DETECTIVE.
+    Role.DETECTIVE: GAME_RULES + """
+=== YOUR ROLE: DETECTIVE ===
 
-Your goal is to help the town win by investigating players. Each night, you can investigate one player to learn if they are MAFIA or not.
+You are the Detective, aligned with Town.
 
-CRITICAL STRATEGY:
-- When you find a Mafia member, SHARE THIS IMMEDIATELY and CLEARLY. Say something like "I am the Detective. I investigated [NAME] and they ARE MAFIA."
-- Repeat your findings multiple times if needed to ensure town hears you.
-- Push hard to get town to vote with you. Coordinate the lynch!
-- Yes, mafia may target you after you reveal, but getting a confirmed mafia lynched is worth the risk.
-- If you find someone is NOT mafia, that's also useful info - share it to build trust.
+Your abilities:
+- During night: Investigate one player to learn if they are MAFIA or NOT MAFIA
 
-Investigation strategy:
-- Investigate the most suspicious players first
-- If accused, reveal your role and findings to defend yourself
+Your win condition: Town wins when all Mafia are eliminated.
 
-Remember: Town wins when all mafia are eliminated. Your information is the town's best weapon!
+Things to consider:
+- You are the only source of confirmed information about player alignments
+- Revealing your findings publicly gives Town information but also reveals you to Mafia
+- False Detective claims are possible - Mafia might claim to be Detective
+
 """ + REASONING_INSTRUCTION,
 
-    Role.TOWN: """You are playing a game of Mafia. You are a regular TOWN member.
+    Role.TOWN: GAME_RULES + """
+=== YOUR ROLE: TOWN ===
 
-Your goal is to identify and vote out the mafia members. You have no special abilities, but your vote and voice are powerful tools.
+You are a regular Town member with no special abilities.
 
-CRITICAL STRATEGY - How to evaluate claims:
-1. DETECTIVE CLAIMS are extremely valuable. If someone claims to be Detective and says they found a Mafia member, this is STRONG EVIDENCE. Follow up on it!
-2. Be suspicious of people who vote AGAINST someone the Detective accused - they might be protecting Mafia.
-3. Mafia will try to discredit the Detective or lynch them. Don't fall for it.
-4. Coordinate votes with other town members - scattered votes let Mafia win.
+Your abilities:
+- During day: Participate in discussion and share your observations
+- During voting: Cast your vote for who should be lynched
 
-Other tips:
-- Pay attention to who is being defensive or evasive
-- Look for inconsistencies in people's stories
-- If the Detective found someone, VOTE FOR THAT PERSON unless you have strong contrary evidence
+Your win condition: Town wins when all Mafia are eliminated.
 
-Remember: Town wins when all mafia are eliminated. Coordinated voting is essential!
+Things to consider:
+- Your vote is your main power - coordinated voting is more effective than scattered votes
+- Pay attention to claims made during discussion (role claims, Mafia accusations)
+
 """ + REASONING_INSTRUCTION
 }
 
@@ -142,7 +190,7 @@ def get_day_phase_prompt(
             messages_xml = "\n<town_square>\n  <!-- No messages yet. You may be the first to speak! -->\n</town_square>"
         
         duration_mins = phase_duration_seconds // 60
-        return f"""It is now DAYTIME. You have {duration_mins} minutes to discuss with the other players before voting begins.{previous_votes_xml}
+        return f"""<phase>DAY - Discussion ({duration_mins} minutes)</phase>{previous_votes_xml}
 
 <game_state>
   <living_players>{', '.join(living_players)}</living_players>
@@ -150,7 +198,7 @@ def get_day_phase_prompt(
 </game_state>
 {messages_xml}
 
-Briefly summarize your current thinking (1-2 sentences), then use send_message to speak or wait_for_messages to listen."""
+Use send_message to speak in the town square, or wait_for_messages to listen for others."""
     
     else:
         # Subsequent prompt - only show new messages since last seen
@@ -172,10 +220,12 @@ Briefly summarize your current thinking (1-2 sentences), then use send_message t
             mins, secs = divmod(int(remaining), 60)
             time_remaining = f" (~{mins}:{secs:02d} remaining)"
         
-        return f"""Discussion continues.{time_remaining} {len(new_messages)} new message(s) since you last checked.
+        return f"""<phase>DAY - Discussion continues{time_remaining}</phase>
+
+{len(new_messages)} new message(s) since you last checked.
 {messages_xml}
 
-Briefly summarize your thinking, then use send_message to speak or wait_for_messages to listen."""
+Use send_message to speak or wait_for_messages to listen."""
 
 
 def get_voting_phase_prompt(player: Player, living_players: list[str], messages: Optional[list[PublicMessage]] = None) -> str:
@@ -192,16 +242,16 @@ def get_voting_phase_prompt(player: Player, living_players: list[str], messages:
     
     vote_options = other_players + ["no_lynch"]
     
-    return f"""<phase>VOTING - Choose who to lynch</phase>
+    return f"""<phase>VOTING</phase>
 
 <living_players>{', '.join(living_players)}</living_players>
 <vote_options>{', '.join(vote_options)}</vote_options>
 {claims_summary}
-IMPORTANT: Review what was said during discussion. Did anyone claim to be Detective and identify a Mafia member? If so, strongly consider voting for the accused unless you have good reason not to. Scattered votes help Mafia win!
+Reminder: A strict majority (more than half of living players) is needed to lynch someone. You can vote for any living player or "no_lynch".
 
-You can vote for any player, or vote 'no_lynch' if you don't want anyone to be lynched today.
+Consider: What claims were made? What evidence was presented? Who seems suspicious or trustworthy?
 
-Summarize your reasoning (who made accusations? who was accused? what evidence?), then use cast_vote."""
+Use cast_vote to submit your vote."""
 
 
 def get_night_phase_prompt(player: Player, living_players: list[str], last_protected: Optional[str] = None) -> str:
@@ -211,10 +261,10 @@ def get_night_phase_prompt(player: Player, living_players: list[str], last_prote
     if player.role == Role.MAFIA:
         return f"""<phase>NIGHT</phase>
 <your_role>MAFIA</your_role>
-<action>Choose someone to kill</action>
+<action>Choose a kill target</action>
 <targets>{', '.join(other_players)}</targets>
 
-Briefly explain your target choice (1-2 sentences), then use night_action."""
+Use night_action to select your target."""
     
     elif player.role == Role.DOCTOR:
         # Filter out last protected player (consecutive protection rule)
@@ -222,14 +272,14 @@ Briefly explain your target choice (1-2 sentences), then use night_action."""
         restriction_note = ""
         if last_protected and last_protected in living_players:
             valid_targets = [p for p in living_players if p != last_protected]
-            restriction_note = f"\n<restriction>You protected {last_protected} last night. You CANNOT protect them again tonight.</restriction>"
+            restriction_note = f"\n<restriction>You protected {last_protected} last night and cannot protect them again tonight.</restriction>"
         
         return f"""<phase>NIGHT</phase>
 <your_role>DOCTOR</your_role>
 <action>Choose someone to protect</action>
-<targets>{', '.join(valid_targets)}</targets>{restriction_note}
+<valid_targets>{', '.join(valid_targets)}</valid_targets>{restriction_note}
 
-Briefly explain who you'll protect and why (1-2 sentences), then use night_action."""
+Use night_action to select who to protect."""
     
     elif player.role == Role.DETECTIVE:
         return f"""<phase>NIGHT</phase>
@@ -237,11 +287,11 @@ Briefly explain who you'll protect and why (1-2 sentences), then use night_actio
 <action>Choose someone to investigate</action>
 <targets>{', '.join(other_players)}</targets>
 
-Briefly explain who you'll investigate and why (1-2 sentences), then use night_action."""
+Use night_action to select who to investigate. You will learn if they are MAFIA or NOT MAFIA."""
     
     else:
         # Town has no night action
-        return "<phase>NIGHT</phase>\nAs a regular town member, you have no night action. Wait for morning."
+        return "<phase>NIGHT</phase>\nYou have no night action. Waiting for morning."
 
 
 class PlayerAgent:
@@ -617,14 +667,14 @@ class PlayerAgent:
 <potential_targets>{', '.join(targets)}</potential_targets>{current_intention}
 {messages_xml}
 
-Coordinate with your mafia partners on who to kill tonight. IMPORTANT: You must use mafia_kill_vote to lock in your kill target before time runs out.
+This is your private Mafia channel. Coordinate with your teammates on tonight's kill.
 
-Available actions:
-1. mafia_chat - Send a message to your partners (they will see it)
-2. mafia_kill_vote - Set who you want to kill (REQUIRED - can be changed)
-3. wait_for_messages - Wait for your partners to respond
+Available tools:
+- mafia_chat: Send a message to your teammates
+- mafia_kill_vote: Set your kill target (all Mafia must vote; if unanimous, discussion ends early)
+- wait_for_messages: Wait for teammates to respond
 
-Strategy: Discuss briefly, then both vote for the same target using mafia_kill_vote. If you don't vote, no kill happens!"""
+Reminder: If Mafia don't all vote, or votes are tied, the result may be random or no kill."""
             
             try:
                 response = await asyncio.wait_for(

@@ -576,7 +576,7 @@ def print_results(results: BatchResults):
     output_cost = (summary["total_completion_tokens"] / 1_000_000) * OUTPUT_PRICE
     total_cost = input_cost + output_cost
     
-    print(f"\n💰 TOTAL COST (gpt-5-nano pricing):")
+    print(f"\n💰 TOTAL COST (gpt-5-mini pricing):")
     print(f"   Tokens: {summary['total_tokens']:,} ({summary['total_prompt_tokens']:,} in / {summary['total_completion_tokens']:,} out)")
     print(f"   Cost:   ${total_cost:.4f} (${total_cost / summary['total_games']:.4f} per game)")
     
@@ -615,7 +615,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run batch Mafia games")
     parser.add_argument("--games", "-n", type=int, default=10, help="Number of games to run")
     parser.add_argument("--parallel", "-p", type=int, default=5, help="Max parallel games")
-    parser.add_argument("--model", "-m", type=str, default="gpt-5-nano", help="Model to use")
+    parser.add_argument("--model", "-m", type=str, default="gpt-5-mini", help="Model to use")
     parser.add_argument("--day-duration", "-d", type=int, default=30, help="Day phase duration (seconds)")
     parser.add_argument("--turn-limit", "-t", type=int, default=10, help="Max turns per game")
     

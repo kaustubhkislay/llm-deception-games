@@ -84,8 +84,8 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default="gpt-5-nano",
-        help="OpenAI model to use for players (default: gpt-5-nano)"
+        default="gpt-5-mini",
+        help="OpenAI model to use for players (default: gpt-5-mini)"
     )
     parser.add_argument(
         "--turn-limit",
@@ -148,7 +148,7 @@ def main():
         print(f"   Total tokens: {usage['total_tokens']:,}")
         print(f"\n   Cache hits: {int(cache['hits'])} ({cache['hit_rate']*100:.1f}% hit rate)")
         print(f"   Cache misses: {int(cache['misses'])}")
-        print(f"\n💰 ESTIMATED COST (gpt-5-nano)")
+        print(f"\n💰 ESTIMATED COST (gpt-5-mini)")
         print(f"   Input:  ${input_cost:.4f}")
         print(f"   Output: ${output_cost:.4f}")
         print(f"   Total:  ${total_cost:.4f}")
