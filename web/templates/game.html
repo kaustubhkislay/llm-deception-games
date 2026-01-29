@@ -9,6 +9,7 @@
         <span class="phase-name">Loading...</span>
         <span class="day-number"></span>
     </div>
+    <button id="stop-btn" class="stop-btn" onclick="stopGame()">⏹ Stop Game</button>
 </header>
 
 <!-- Timeline Navigation -->
@@ -655,6 +656,19 @@ function updateCurrentPhase(event) {
     // Re-render if viewing the current live phase (regardless of isLive flag)
     if (timelineState.currentIndex === timelineState.liveIndex && !timelineState.viewingPlayer) {
         renderPhaseContent(currentPhase);
+    }
+}
+
+// Stop game
+function stopGame() {
+    if (confirm('Stop the game server?')) {
+        fetch('/api/stop', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                alert('Server stopping...');
+                setTimeout(() => window.close(), 1000);
+            })
+            .catch(e => alert('Failed to stop: ' + e));
     }
 }
 

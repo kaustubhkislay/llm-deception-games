@@ -255,6 +255,22 @@ def player_events(player_name: str):
     return response
 
 
+@app.route("/api/stop", methods=["POST"])
+def stop_server():
+    """Stop the game server gracefully."""
+    import os
+    import signal
+    
+    def shutdown():
+        os.kill(os.getpid(), signal.SIGTERM)
+    
+    # Schedule shutdown after response
+    from threading import Timer
+    Timer(0.5, shutdown).start()
+    
+    return jsonify({"status": "stopping", "message": "Server shutting down..."})
+
+
 def run_app(host: str = "127.0.0.1", port: int = 8080, debug: bool = False) -> None:
     """Run the Flask app."""
     app.run(host=host, port=port, debug=debug, threaded=True, use_reloader=False)

@@ -54,6 +54,23 @@ body {
     justify-content: space-between;
     padding: 1rem 2rem;
     border-bottom: 1px solid var(--border-color);
+    gap: 1rem;
+}
+
+.stop-btn {
+    background: var(--mafia-color);
+    color: white;
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.9rem;
+    transition: opacity 0.2s;
+}
+
+.stop-btn:hover {
+    opacity: 0.85;
 }
 
 h1 {
