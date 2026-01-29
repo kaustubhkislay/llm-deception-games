@@ -231,20 +231,33 @@ class CachedLLMClient:
 
 
 # Tool definitions for players
-SEND_MESSAGE_TOOL = {
+DRAFT_MESSAGE_TOOL = {
     "type": "function",
     "function": {
-        "name": "send_message",
-        "description": "Send a message to the group chat. All living players will see this message. Use this to discuss, accuse, defend yourself, or share information.",
+        "name": "draft_message",
+        "description": "Prepare a message to send. This does NOT send it yet - you'll see any new messages that arrived while drafting, then can send or revise.",
         "parameters": {
             "type": "object",
             "properties": {
                 "content": {
                     "type": "string",
-                    "description": "The message to send to the group chat"
+                    "description": "The message text to draft"
                 }
             },
             "required": ["content"]
+        }
+    }
+}
+
+SEND_MESSAGE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "send_message",
+        "description": "Send your drafted message to the group chat. You must draft a message first using draft_message.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
         }
     }
 }
@@ -299,20 +312,33 @@ NIGHT_ACTION_TOOL = {
 }
 
 # Mafia coordination tools
-MAFIA_CHAT_TOOL = {
+MAFIA_DRAFT_MESSAGE_TOOL = {
     "type": "function",
     "function": {
-        "name": "mafia_chat",
-        "description": "Send a private message to your fellow mafia members. Only other mafia can see this.",
+        "name": "mafia_draft_message",
+        "description": "Prepare a private message to your fellow mafia. This does NOT send it yet - you'll see any new messages, then can send or revise.",
         "parameters": {
             "type": "object",
             "properties": {
                 "content": {
                     "type": "string",
-                    "description": "The message to send to your mafia partners"
+                    "description": "The message text to draft"
                 }
             },
             "required": ["content"]
+        }
+    }
+}
+
+MAFIA_SEND_MESSAGE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "mafia_send_message",
+        "description": "Send your drafted message to your fellow mafia members. You must draft a message first using mafia_draft_message.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
         }
     }
 }
@@ -336,7 +362,7 @@ MAFIA_VOTE_TOOL = {
 }
 
 # Day phase tools
-DAY_TOOLS = [SEND_MESSAGE_TOOL, WAIT_FOR_MESSAGES_TOOL]
+DAY_TOOLS = [DRAFT_MESSAGE_TOOL, SEND_MESSAGE_TOOL, WAIT_FOR_MESSAGES_TOOL]
 
 # Voting phase tools
 VOTING_TOOLS = [VOTE_TOOL]
@@ -346,7 +372,7 @@ NIGHT_TOOLS = [NIGHT_ACTION_TOOL]
 
 # Mafia coordination tools
 # Mafia discussion includes ability to set kill intention (can be changed during discussion)
-MAFIA_DISCUSSION_TOOLS = [MAFIA_CHAT_TOOL, MAFIA_VOTE_TOOL, WAIT_FOR_MESSAGES_TOOL]
+MAFIA_DISCUSSION_TOOLS = [MAFIA_DRAFT_MESSAGE_TOOL, MAFIA_SEND_MESSAGE_TOOL, MAFIA_VOTE_TOOL, WAIT_FOR_MESSAGES_TOOL]
 MAFIA_VOTE_TOOLS = [MAFIA_VOTE_TOOL]
 
 

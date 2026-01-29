@@ -42,7 +42,7 @@ GAME PHASES:
 2. DAY PHASE (Discussion):
    - All living players discuss openly in the town square
    - Discussion has a time limit (announced at start)
-   - Messages appear with timestamps
+   - No votes can be cast or locked in during the discussion phase
 
 3. VOTING PHASE:
    - After discussion, each player votes simultaneously (blind voting)
@@ -146,7 +146,9 @@ def get_day_phase_prompt(
     is_first_prompt: bool = True,
     previous_votes: Optional[dict[str, str]] = None,
     phase_start_time: Optional[datetime] = None,
-    phase_duration_seconds: int = 300
+    phase_duration_seconds: int = 300,
+    day_number: int = 1,
+    current_draft: Optional[str] = None
 ) -> str:
     """Generate the prompt for the day discussion phase.
     
@@ -159,16 +161,9 @@ def get_day_phase_prompt(
         previous_votes: Dict of voter -> target from previous day's vote (if any)
         phase_start_time: When this phase started (for relative timestamps)
         phase_duration_seconds: How long this phase lasts
+        current_draft: The player's current unsent draft message, if any
     """
     other_players = [p for p in living_players if p != player.name]
-    
-    # Calculate elapsed time
-    def format_elapsed(msg_time: datetime) -> str:
-        if phase_start_time:
-            elapsed = (msg_time - phase_start_time).total_seconds()
-            mins, secs = divmod(int(elapsed), 60)
-            return f"{mins}:{secs:02d}"
-        return msg_time.strftime("%H:%M:%S")
     
     # Build previous votes summary if available
     previous_votes_xml = ""
@@ -178,19 +173,24 @@ def get_day_phase_prompt(
             previous_votes_xml += f'  <vote voter="{voter}" target="{target}"/>\n'
         previous_votes_xml += "</previous_day_votes>\n"
     
+    # Build draft indicator
+    draft_xml = ""
+    if current_draft:
+        draft_xml = f'\n<your_draft>"{current_draft}"</your_draft>\n'
+    
     # Build XML-structured message view
     if is_first_prompt:
         # First prompt of the day - show context and any messages
         if messages_so_far:
             messages_xml = "\n<town_square>\n"
             for msg in messages_so_far:
-                messages_xml += f'  <message sender="{msg.sender_name}" time="{format_elapsed(msg.timestamp)}">{msg.content}</message>\n'
+                messages_xml += f'  <message sender="{msg.sender_name}">{msg.content}</message>\n'
             messages_xml += "</town_square>"
         else:
             messages_xml = "\n<town_square>\n  <!-- No messages yet. You may be the first to speak! -->\n</town_square>"
         
         duration_mins = phase_duration_seconds // 60
-        return f"""<phase>DAY - Discussion ({duration_mins} minutes)</phase>{previous_votes_xml}
+        return f"""<phase>DAY {day_number} - Discussion ({duration_mins} minutes)</phase>{previous_votes_xml}{draft_xml}
 
 <game_state>
   <living_players>{', '.join(living_players)}</living_players>
@@ -198,7 +198,7 @@ def get_day_phase_prompt(
 </game_state>
 {messages_xml}
 
-Use send_message to speak in the town square, or wait_for_messages to listen for others."""
+Tools: draft_message to prepare a message, send_message to post your draft, wait_for_messages to listen."""
     
     else:
         # Subsequent prompt - only show new messages since last seen
@@ -207,7 +207,7 @@ Use send_message to speak in the town square, or wait_for_messages to listen for
         if new_messages:
             messages_xml = "\n<new_messages>\n"
             for msg in new_messages:
-                messages_xml += f'  <message sender="{msg.sender_name}" time="{format_elapsed(msg.timestamp)}">{msg.content}</message>\n'
+                messages_xml += f'  <message sender="{msg.sender_name}">{msg.content}</message>\n'
             messages_xml += "</new_messages>"
         else:
             messages_xml = "\n<new_messages>\n  <!-- No new messages -->\n</new_messages>"
@@ -220,15 +220,15 @@ Use send_message to speak in the town square, or wait_for_messages to listen for
             mins, secs = divmod(int(remaining), 60)
             time_remaining = f" (~{mins}:{secs:02d} remaining)"
         
-        return f"""<phase>DAY - Discussion continues{time_remaining}</phase>
+        return f"""<phase>DAY {day_number} - Discussion continues{time_remaining}</phase>{draft_xml}
 
 {len(new_messages)} new message(s) since you last checked.
 {messages_xml}
 
-Use send_message to speak or wait_for_messages to listen."""
+Tools: draft_message to prepare, send_message to post your draft, wait_for_messages to listen."""
 
 
-def get_voting_phase_prompt(player: Player, living_players: list[str], messages: Optional[list[PublicMessage]] = None) -> str:
+def get_voting_phase_prompt(player: Player, living_players: list[str], messages: Optional[list[PublicMessage]] = None, day_number: int = 1) -> str:
     """Generate the prompt for the voting phase."""
     other_players = [p for p in living_players if p != player.name]
     
@@ -242,7 +242,7 @@ def get_voting_phase_prompt(player: Player, living_players: list[str], messages:
     
     vote_options = other_players + ["no_lynch"]
     
-    return f"""<phase>VOTING</phase>
+    return f"""<phase>DAY {day_number} - VOTING</phase>
 
 <living_players>{', '.join(living_players)}</living_players>
 <vote_options>{', '.join(vote_options)}</vote_options>
@@ -254,12 +254,12 @@ Consider: What claims were made? What evidence was presented? Who seems suspicio
 Use cast_vote to submit your vote."""
 
 
-def get_night_phase_prompt(player: Player, living_players: list[str], last_protected: Optional[str] = None) -> str:
+def get_night_phase_prompt(player: Player, living_players: list[str], last_protected: Optional[str] = None, night_number: int = 1) -> str:
     """Generate the prompt for the night phase based on role."""
     other_players = [p for p in living_players if p != player.name]
     
     if player.role == Role.MAFIA:
-        return f"""<phase>NIGHT</phase>
+        return f"""<phase>NIGHT {night_number}</phase>
 <your_role>MAFIA</your_role>
 <action>Choose a kill target</action>
 <targets>{', '.join(other_players)}</targets>
@@ -274,7 +274,7 @@ Use night_action to select your target."""
             valid_targets = [p for p in living_players if p != last_protected]
             restriction_note = f"\n<restriction>You protected {last_protected} last night and cannot protect them again tonight.</restriction>"
         
-        return f"""<phase>NIGHT</phase>
+        return f"""<phase>NIGHT {night_number}</phase>
 <your_role>DOCTOR</your_role>
 <action>Choose someone to protect</action>
 <valid_targets>{', '.join(valid_targets)}</valid_targets>{restriction_note}
@@ -282,7 +282,7 @@ Use night_action to select your target."""
 Use night_action to select who to protect."""
     
     elif player.role == Role.DETECTIVE:
-        return f"""<phase>NIGHT</phase>
+        return f"""<phase>NIGHT {night_number}</phase>
 <your_role>DETECTIVE</your_role>
 <action>Choose someone to investigate</action>
 <targets>{', '.join(other_players)}</targets>
@@ -291,7 +291,7 @@ Use night_action to select who to investigate. You will learn if they are MAFIA 
     
     else:
         # Town has no night action
-        return "<phase>NIGHT</phase>\nYou have no night action. Waiting for morning."
+        return f"<phase>NIGHT {night_number}</phase>\nYou have no night action. Waiting for morning."
 
 
 class PlayerAgent:
@@ -327,11 +327,21 @@ class PlayerAgent:
         self._current_phase: str = "NIGHT"
         self._current_day: int = 1
         
-        # Initialize chat history with system prompt
+        # Draft message (for two-step send workflow)
+        self._current_draft: Optional[str] = None
+        self._mafia_draft: Optional[str] = None
+        
+        # Initialize chat history with system prompt (insert player name before reasoning instruction)
+        base_prompt = ROLE_SYSTEM_PROMPTS[player.role]
+        # Insert player name before the reasoning instruction
+        system_prompt = base_prompt.replace(
+            REASONING_INSTRUCTION,
+            f"\nYour name is {player.name}.\n" + REASONING_INSTRUCTION
+        )
         self.player.chat_history = [
             ChatMessage(
                 role="system",
-                content=ROLE_SYSTEM_PROMPTS[player.role]
+                content=system_prompt
             )
         ]
     
@@ -427,16 +437,28 @@ class PlayerAgent:
         func_name = tool_call["function"]["name"]
         args = json.loads(tool_call["function"]["arguments"])
         
-        if func_name == "send_message":
+        if func_name == "draft_message":
             content = args["content"]
-            # Timestamp is NOW (after inference completed)
+            self._current_draft = content
+            return f"Draft saved: \"{content}\"\nYou can now send_message to post it, or draft_message again to revise."
+        
+        elif func_name == "send_message":
+            if self._current_draft is None:
+                return "Error: No draft to send. Use draft_message first."
+            content = self._current_draft
+            self._current_draft = None  # Clear draft after sending
             await self.send_message_callback(self.player.name, content)
             return f"Message sent: {content}"
         
         elif func_name == "wait_for_messages":
-            # Wait for the new message event
+            # Wait for the appropriate message event (mafia or public)
             print(f"  [{self.player.name}] Waiting for new messages...")
-            await self.new_message_event.wait()
+            if self._mafia_message_event is not None:
+                # In mafia coordination phase - wait for mafia messages
+                await self._mafia_message_event.wait()
+            else:
+                # In day phase - wait for public messages
+                await self.new_message_event.wait()
             return "New messages have arrived. Check the chat."
         
         elif func_name == "cast_vote":
@@ -447,8 +469,16 @@ class PlayerAgent:
             target = args["target"]
             return f"NIGHT_ACTION:{target}"  # Special return value for night action
         
-        elif func_name == "mafia_chat":
+        elif func_name == "mafia_draft_message":
             content = args["content"]
+            self._mafia_draft = content
+            return f"Mafia draft saved: \"{content}\"\nUse mafia_send_message to post it, or mafia_draft_message to revise."
+        
+        elif func_name == "mafia_send_message":
+            if self._mafia_draft is None:
+                return "Error: No mafia draft to send. Use mafia_draft_message first."
+            content = self._mafia_draft
+            self._mafia_draft = None  # Clear draft after sending
             if self._mafia_send_callback:
                 await self._mafia_send_callback(self.player.name, content)
             return f"Mafia message sent: {content}"
@@ -489,6 +519,8 @@ class PlayerAgent:
                 previous_votes=previous_votes if is_first_prompt else None,
                 phase_start_time=phase_start_time,
                 phase_duration_seconds=phase_duration_seconds,
+                day_number=self._current_day,
+                current_draft=self._current_draft,
             )
             
             # Update last seen count BEFORE the LLM call (blind writing)
@@ -533,7 +565,7 @@ class PlayerAgent:
         """Run the voting phase and return (vote_target, reasoning) tuple."""
         print(f"[{self.player.name}] Starting voting phase")
         
-        prompt = get_voting_phase_prompt(self.player, living_players, messages)
+        prompt = get_voting_phase_prompt(self.player, living_players, messages, day_number=self._current_day)
         response = await self._call_llm(prompt, VOTING_TOOLS)
         
         reasoning = response.content  # Capture the LLM's reasoning
@@ -575,7 +607,7 @@ class PlayerAgent:
         
         # Pass last_protected to doctor's prompt
         last_protected = self._last_protected if self.player.role == Role.DOCTOR else None
-        prompt = get_night_phase_prompt(self.player, living_players, last_protected)
+        prompt = get_night_phase_prompt(self.player, living_players, last_protected, night_number=self._current_day)
         response = await self._call_llm(prompt, NIGHT_TOOLS)
         
         reasoning = response.content  # Capture the LLM's reasoning
@@ -615,6 +647,9 @@ class PlayerAgent:
         """Set the current game phase for thought tracking."""
         self._current_phase = phase
         self._current_day = day
+        # Clear any pending drafts from previous phase
+        self._current_draft = None
+        self._mafia_draft = None
     
     def set_mafia_callbacks(
         self,
@@ -661,20 +696,23 @@ class PlayerAgent:
             
             current_intention = f"\n<your_current_intention>{self._current_kill_intention or 'Not set'}</your_current_intention>"
             
-            prompt = f"""<phase>NIGHT - MAFIA COORDINATION</phase>
+            # Build draft indicator
+            draft_xml = ""
+            if self._mafia_draft:
+                draft_xml = f'\n<your_draft>"{self._mafia_draft}"</your_draft>'
+            
+            night_num = self._current_day  # Night number matches day number
+            prompt = f"""<phase>NIGHT {night_num} - MAFIA COORDINATION</phase>
 <your_team>MAFIA</your_team>
 <teammates>{', '.join(other_mafia) if other_mafia else 'You are the only mafia'}</teammates>
-<potential_targets>{', '.join(targets)}</potential_targets>{current_intention}
+<potential_targets>{', '.join(targets)}</potential_targets>{current_intention}{draft_xml}
 {messages_xml}
 
 This is your private Mafia channel. Coordinate with your teammates on tonight's kill.
 
-Available tools:
-- mafia_chat: Send a message to your teammates
-- mafia_kill_vote: Set your kill target (all Mafia must vote; if unanimous, discussion ends early)
-- wait_for_messages: Wait for teammates to respond
+Tools: mafia_draft_message to prepare, mafia_send_message to post, mafia_kill_vote to set target, wait_for_messages to listen.
 
-Reminder: If Mafia don't all vote, or votes are tied, the result may be random or no kill."""
+Reminder: If Mafia kill votes are tied, the tie will be broken randomly. If no Mafia kill votes are cast, nobody will be killed."""
             
             try:
                 response = await asyncio.wait_for(

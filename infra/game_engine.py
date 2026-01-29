@@ -541,8 +541,8 @@ class MafiaGame:
             return target
         
         # Multiple mafia - run coordination phase with integrated voting
-        # Minimum 30 seconds for mafia discussion to allow for LLM response times
-        discussion_duration = max(30, self.day_duration_seconds // 2)
+        # 30 seconds per mafia member for discussion
+        discussion_duration = 30 * len(living_mafia)
         print(f"\n  --- MAFIA COORDINATION ({discussion_duration}s) ---")
         self.logger.info(f"  Mafia coordination phase - {len(living_mafia)} mafia members")
         
@@ -735,11 +735,45 @@ class MafiaGame:
                 detective_target = target
                 self.logger.info(f"  DETECTIVE {player.name} investigates: {target}")
                 
-                # Get investigation result immediately
+                # Get investigation result immediately and tell the detective
                 if target:
                     target_player = self.state.get_player_by_name(target)
                     if target_player:
                         detective_result = target_player.role == Role.MAFIA
+                        result_text = "IS MAFIA" if detective_result else "is NOT Mafia"
+                        
+                        # Add result to detective's chat history so it shows in their thoughts
+                        result_message = f"[INVESTIGATION RESULT] {target} {result_text}."
+                        self.agents[player.name].player.chat_history.append(
+                            ChatMessage(role="user", content=result_message)
+                        )
+                        self.agents[player.name].player.chat_history.append(
+                            ChatMessage(role="assistant", content=f"I now know that {target} {result_text}. I'll remember this for the day discussion.")
+                        )
+                        
+                        # Broadcast as a thought event
+                        await self.broadcaster.broadcast(
+                            GameEvent(
+                                event_type=EventType.PLAYER_THOUGHT,
+                                data={
+                                    "player_name": player.name,
+                                    "prompt": result_message,
+                                    "response": f"I now know that {target} {result_text}. I'll remember this for the day discussion.",
+                                    "tool_calls": None,
+                                    "phase": "NIGHT",
+                                    "day_number": self.state.day_number
+                                }
+                            ),
+                            channels=[f"player_{player.name}"]
+                        )
+                        self.event_log.log_event("PLAYER_THOUGHT", {
+                            "player_name": player.name,
+                            "prompt": result_message,
+                            "response": f"I now know that {target} {result_text}. I'll remember this for the day discussion.",
+                            "tool_calls": None,
+                            "phase": "NIGHT",
+                            "day_number": self.state.day_number
+                        })
                 
                 # Emit reasoning event
                 await self.broadcaster.broadcast(
@@ -1014,50 +1048,58 @@ class MafiaGame:
         # Valid vote targets: living players + "no_lynch"
         valid_targets = set(living_names + ["no_lynch"])
         
-        # Collect votes from all living players (self-votes are allowed)
+        # Collect votes from all living players in parallel (self-votes are allowed)
         votes: dict[str, str] = {}
         vote_reasonings: dict[str, str] = {}
         invalid_votes: list[dict] = []
         
-        for player in self.state.living_players:
+        # Create voting tasks for all living players
+        async def get_player_vote(player: Player) -> tuple[str, Optional[str], Optional[str]]:
+            """Get a player's vote. Returns (player_name, vote, reasoning)."""
             vote, reasoning = await self.agents[player.name].run_voting_phase(living_names, self.state.public_messages)
-            
+            return player.name, vote, reasoning
+        
+        voting_tasks = [get_player_vote(player) for player in self.state.living_players]
+        results = await asyncio.gather(*voting_tasks)
+        
+        # Process results
+        for player_name, vote, reasoning in results:
             # Normalize vote (case-insensitive no_lynch)
             normalized_vote = vote.lower() if vote and vote.lower() == "no_lynch" else vote
             if normalized_vote and normalized_vote.lower() == "no_lynch":
                 normalized_vote = "no_lynch"
             
             if normalized_vote and normalized_vote in valid_targets:
-                votes[player.name] = normalized_vote
-                vote_reasonings[player.name] = reasoning or ""
-                self.state.current_votes[player.name] = normalized_vote
+                votes[player_name] = normalized_vote
+                vote_reasonings[player_name] = reasoning or ""
+                self.state.current_votes[player_name] = normalized_vote
                 
                 # Emit vote with reasoning
                 await self.broadcaster.broadcast(
                     GameEvent(
                         event_type=EventType.VOTE_REASONING,
                         data={
-                            "voter": player.name, 
+                            "voter": player_name, 
                             "target": normalized_vote,
                             "reasoning": reasoning
                         }
                     )
                 )
                 self.event_log.log_event("VOTE_REASONING", {
-                    "voter": player.name, 
+                    "voter": player_name, 
                     "target": normalized_vote,
                     "reasoning": reasoning
                 })
             else:
                 # Track invalid votes for debugging
                 invalid_votes.append({
-                    "voter": player.name,
+                    "voter": player_name,
                     "attempted_target": vote,
                     "reason": "Target not in valid options"
                 })
-                self.logger.warning(f"Invalid vote from {player.name}: '{vote}' (not in {valid_targets})")
+                self.logger.warning(f"Invalid vote from {player_name}: '{vote}' (not in {valid_targets})")
                 self.event_log.log_event("INVALID_VOTE", {
-                    "voter": player.name,
+                    "voter": player_name,
                     "attempted_target": vote,
                     "valid_options": list(valid_targets)
                 })
