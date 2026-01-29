@@ -666,19 +666,20 @@ function handleEvent(event) {
             break;
             
         case 'GM_MESSAGE':
-            updateCurrentPhase({type: 'gm_message', ...data.data});
+            updateCurrentPhase({...data.data, type: 'gm_message'});
             break;
             
         case 'NIGHT_REASONING':
-            updateCurrentPhase({type: 'night_reasoning', ...data.data});
+            updateCurrentPhase({...data.data, type: 'night_reasoning'});
             break;
             
         case 'MAFIA_CHAT':
-            updateCurrentPhase({type: 'mafia_chat', ...data.data});
+            // Spread data first, then set type to ensure our type wins
+            updateCurrentPhase({...data.data, type: 'mafia_chat'});
             break;
             
         case 'MAFIA_KILL_INTENTION':
-            updateCurrentPhase({type: 'kill_intention', ...data.data});
+            updateCurrentPhase({...data.data, type: 'kill_intention'});
             break;
             
         case 'PUBLIC_MESSAGE':
@@ -686,21 +687,21 @@ function handleEvent(event) {
             if (timelineState.phases.length > 0) {
                 const phase = timelineState.phases[timelineState.liveIndex];
                 if (!phase.messages) phase.messages = [];
-                phase.messages.push({type: 'message', ...data.data});
-                updateCurrentPhase({type: 'message', ...data.data});
+                phase.messages.push({...data.data, type: 'message'});
+                updateCurrentPhase({...data.data, type: 'message'});
             }
             break;
             
         case 'VOTE_REASONING':
-            updateCurrentPhase({type: 'vote', ...data.data});
+            updateCurrentPhase({...data.data, type: 'vote'});
             break;
             
         case 'VOTE_RESULT':
-            updateCurrentPhase({type: 'vote_result', ...data.data});
+            updateCurrentPhase({...data.data, type: 'vote_result'});
             break;
             
         case 'NIGHT_RESULT':
-            updateCurrentPhase({type: 'night_result', ...data.data});
+            updateCurrentPhase({...data.data, type: 'night_result'});
             break;
             
         case 'PLAYER_DEATH':
@@ -714,7 +715,7 @@ function handleEvent(event) {
                 phase.players = JSON.parse(JSON.stringify(gameState.players));
             }
             
-            updateCurrentPhase({type: 'death', ...data.data});
+            updateCurrentPhase({...data.data, type: 'death'});
             updatePlayers(gameState.players);
             break;
             
