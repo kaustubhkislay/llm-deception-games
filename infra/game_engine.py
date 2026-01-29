@@ -626,8 +626,27 @@ class MafiaGame:
             )
             discussion_tasks.append((mafia.name, task))
         
-        # Wait for discussion duration
-        await asyncio.sleep(discussion_duration)
+        # Wait for discussion, but check for early unanimous consensus
+        start_time = asyncio.get_event_loop().time()
+        check_interval = 2.0  # Check every 2 seconds
+        
+        while True:
+            elapsed = asyncio.get_event_loop().time() - start_time
+            if elapsed >= discussion_duration:
+                break
+            
+            # Check for unanimous consensus
+            if len(kill_intentions) == len(living_mafia):
+                # All mafia have stated intentions
+                targets = set(kill_intentions.values())
+                if len(targets) == 1:
+                    # Unanimous! End early
+                    print(f"    [MAFIA] Unanimous consensus reached early: {targets.pop()}")
+                    self.logger.info(f"  Mafia reached unanimous consensus early after {elapsed:.1f}s")
+                    break
+            
+            await asyncio.sleep(min(check_interval, discussion_duration - elapsed))
+        
         phase_end_event.set()
         mafia_message_event.set()  # Wake up any waiting mafia
         
