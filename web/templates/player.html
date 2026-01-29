@@ -3,19 +3,44 @@
 {% block title %}{{ player_name }} - LLM Mafia{% endblock %}
 
 {% block content %}
-<header class="player-header">
-    <a href="/" class="back-link">← Back to Game</a>
-    <h1>{{ player_name }}'s Mind</h1>
+<header class="game-header">
+    <h1>LLM Mafia</h1>
     <div id="phase-indicator" class="phase-badge phase-unknown">
         <span class="phase-name">Loading...</span>
+        <span class="day-number"></span>
     </div>
 </header>
 
-<main class="player-layout">
-    <section class="thoughts-panel">
-        <h2>Internal Thoughts</h2>
-        <div id="thoughts-container" class="thoughts-container">
-            <div class="thoughts-placeholder">Loading thoughts...</div>
+<!-- Timeline Navigation -->
+<div class="timeline-container">
+    <div id="timeline" class="timeline">
+        <span class="timeline-loading">Loading timeline...</span>
+    </div>
+</div>
+
+<main class="game-layout">
+    <!-- Players Panel -->
+    <aside class="players-panel">
+        <h2>Players</h2>
+        <ul id="players-list" class="players-list">
+            <!-- Populated by JS -->
+        </ul>
+        <div class="back-button-container">
+            <button id="back-to-square-btn" class="back-to-square-btn" onclick="backToTownSquare()">
+                ← Back to Town Square
+            </button>
+        </div>
+    </aside>
+
+    <!-- Main Panel - Player Thoughts -->
+    <section class="main-panel" id="main-panel">
+        <div class="panel-header">
+            <h2 id="panel-title">{{ player_name }}'s Thoughts</h2>
+        </div>
+        <div id="panel-content" class="panel-content">
+            <div id="thoughts-container" class="thoughts-container">
+                <div class="thoughts-placeholder">Loading thoughts...</div>
+            </div>
         </div>
     </section>
 </main>
@@ -24,21 +49,172 @@
 {% block scripts %}
 <script>
 const playerName = "{{ player_name }}";
-const thoughtsContainer = document.getElementById('thoughts-container');
+
+// Player colors
+const PLAYER_COLORS = {
+    'Alice': '#e74c3c',
+    'Bob': '#3498db',
+    'Charlie': '#2ecc71',
+    'Diana': '#9b59b6',
+    'Edward': '#f39c12',
+    'Fiona': '#1abc9c',
+    'George': '#e91e63',
+};
+
+const PHASE_ICONS = {
+    'NIGHT': '🌙',
+    'DAY': '☀️',
+    'VOTING': '🗳️',
+    'GAME_OVER': '🏁'
+};
+
+function getPlayerColor(name) {
+    return PLAYER_COLORS[name] || '#95a5a6';
+}
+
+// Game state
+let gameState = {
+    phase: 'UNKNOWN',
+    dayNumber: 0,
+    players: []
+};
+
+// Timeline state
+let timelineState = {
+    phases: [],
+    currentIndex: -1,
+    liveIndex: -1,
+    isLive: true
+};
+
+// Thoughts grouped by phase
+let thoughtsByPhase = {};
+let currentPhaseKey = null;
+
+// DOM elements
 const phaseIndicator = document.getElementById('phase-indicator');
 const phaseName = phaseIndicator.querySelector('.phase-name');
-
-// Update phase indicator
-function updatePhase(phase) {
-    phaseIndicator.className = `phase-badge phase-${phase.toLowerCase()}`;
-    phaseName.textContent = phase;
-}
+const dayNumberEl = phaseIndicator.querySelector('.day-number');
+const playersList = document.getElementById('players-list');
+const timeline = document.getElementById('timeline');
+const panelTitle = document.getElementById('panel-title');
+const thoughtsContainer = document.getElementById('thoughts-container');
 
 // Escape HTML
 function escapeHtml(text) {
+    if (!text) return '';
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+// Update phase indicator
+function updatePhaseIndicator(phase, day) {
+    phaseIndicator.className = `phase-badge phase-${phase.toLowerCase()}`;
+    phaseName.textContent = phase;
+    if (day) {
+        dayNumberEl.textContent = `Day ${day}`;
+    }
+}
+
+// Update players list
+function updatePlayers(players) {
+    playersList.innerHTML = players.map(p => {
+        const isViewing = p.name === playerName;
+        return `
+            <li class="player-item ${p.is_alive ? 'alive' : 'dead'} ${isViewing ? 'viewing' : ''}">
+                <a href="/player/${p.name}" 
+                   class="player-link ${isViewing ? 'active' : ''}" 
+                   style="border-left: 4px solid ${getPlayerColor(p.name)}">
+                    <span class="player-name" style="color: ${getPlayerColor(p.name)}">${p.name}</span>
+                    <span class="player-role role-${p.role.toLowerCase()}">${p.role}</span>
+                    <span class="player-status">${p.is_alive ? '🟢' : '💀'}</span>
+                </a>
+            </li>
+        `;
+    }).join('');
+}
+
+// Render timeline
+function renderTimeline() {
+    if (timelineState.phases.length === 0) {
+        timeline.innerHTML = '<span class="timeline-loading">Waiting for game...</span>';
+        return;
+    }
+    
+    let html = '';
+    let lastDay = 0;
+    
+    timelineState.phases.forEach((phase, idx) => {
+        if (phase.dayNumber !== lastDay) {
+            if (idx > 0) html += '<div class="timeline-connector"></div>';
+            html += `<div class="timeline-day-marker">Day ${phase.dayNumber}</div>`;
+            lastDay = phase.dayNumber;
+        } else if (idx > 0) {
+            html += '<div class="timeline-connector"></div>';
+        }
+        
+        const isActive = idx === timelineState.currentIndex;
+        
+        html += `
+            <div class="timeline-phase phase-${phase.phase.toLowerCase()} ${isActive ? 'active' : ''}" 
+                 onclick="navigateToPhase(${idx})"
+                 title="${phase.phase} - Day ${phase.dayNumber}">
+                <span class="timeline-phase-icon">${PHASE_ICONS[phase.phase] || '❓'}</span>
+                <span class="timeline-phase-label">${phase.phase}</span>
+            </div>
+        `;
+    });
+    
+    if (timelineState.isLive && timelineState.currentIndex === timelineState.liveIndex) {
+        html += '<div class="timeline-connector"></div>';
+        html += `
+            <div class="timeline-live-indicator">
+                <span class="live-dot"></span>
+                <span>LIVE</span>
+            </div>
+        `;
+    }
+    
+    timeline.innerHTML = html;
+}
+
+// Navigate to phase
+function navigateToPhase(index) {
+    if (index < 0 || index >= timelineState.phases.length) return;
+    
+    timelineState.currentIndex = index;
+    timelineState.isLive = (index === timelineState.liveIndex);
+    
+    const snapshot = timelineState.phases[index];
+    
+    updatePhaseIndicator(snapshot.phase, snapshot.dayNumber);
+    updatePlayers(snapshot.players);
+    
+    // Show thoughts for this phase
+    const phaseKey = `${snapshot.dayNumber}_${snapshot.phase}`;
+    renderThoughtsForPhase(phaseKey, snapshot);
+    
+    renderTimeline();
+}
+
+// Render thoughts for a specific phase
+function renderThoughtsForPhase(phaseKey, snapshot) {
+    panelTitle.textContent = `${playerName}'s Thoughts - ${snapshot.phase} Day ${snapshot.dayNumber}`;
+    
+    const thoughts = thoughtsByPhase[phaseKey] || [];
+    
+    if (thoughts.length === 0) {
+        thoughtsContainer.innerHTML = `
+            <div class="thoughts-placeholder">
+                No thoughts recorded for ${playerName} during this phase.
+            </div>
+        `;
+        return;
+    }
+    
+    thoughtsContainer.innerHTML = '';
+    thoughts.forEach(thought => addThought(thought, false));
 }
 
 // Format tool calls
@@ -46,17 +222,21 @@ function formatToolCalls(toolCalls) {
     if (!toolCalls || toolCalls.length === 0) return '';
     
     return toolCalls.map(tc => {
-        const args = JSON.parse(tc.function.arguments);
+        let args;
+        try {
+            args = JSON.parse(tc.function.arguments);
+        } catch {
+            args = tc.function.arguments;
+        }
         return `<div class="tool-call">
-            <span class="tool-name">${tc.function.name}</span>
-            <span class="tool-args">${JSON.stringify(args)}</span>
+            <span class="tool-name">[${tc.function.name}]</span>
+            <span class="tool-args">${typeof args === 'object' ? JSON.stringify(args) : args}</span>
         </div>`;
     }).join('');
 }
 
 // Add a thought message
-function addThought(thought) {
-    // Remove placeholder if present
+function addThought(thought, scroll = true) {
     const placeholder = thoughtsContainer.querySelector('.thoughts-placeholder');
     if (placeholder) placeholder.remove();
     
@@ -89,7 +269,15 @@ function addThought(thought) {
     
     msgEl.innerHTML = content;
     thoughtsContainer.appendChild(msgEl);
-    thoughtsContainer.scrollTop = thoughtsContainer.scrollHeight;
+    
+    if (scroll) {
+        thoughtsContainer.scrollTop = thoughtsContainer.scrollHeight;
+    }
+}
+
+// Back to town square
+function backToTownSquare() {
+    window.location.href = '/';
 }
 
 // Handle SSE events
@@ -98,31 +286,115 @@ function handleEvent(event) {
     console.log('Event:', data);
     
     switch (data.event_type) {
+        case 'INITIAL_STATE':
+            gameState.players = data.data.players;
+            gameState.phase = data.data.phase;
+            gameState.dayNumber = data.data.day_number;
+            
+            if (data.data.phase_history && data.data.phase_history.length > 0) {
+                timelineState.phases = data.data.phase_history;
+                timelineState.liveIndex = timelineState.phases.length - 1;
+                timelineState.currentIndex = timelineState.liveIndex;
+                timelineState.isLive = false;
+                
+                renderTimeline();
+                navigateToPhase(timelineState.currentIndex);
+            }
+            break;
+            
         case 'INITIAL_THOUGHTS':
-            // Clear and load initial thoughts
-            thoughtsContainer.innerHTML = '';
-            data.data.thoughts.forEach(addThought);
+            // Group thoughts by phase - for now put all in current phase
+            const initialPhaseKey = `${gameState.dayNumber}_${gameState.phase}`;
+            thoughtsByPhase[initialPhaseKey] = data.data.thoughts || [];
+            
+            if (timelineState.currentIndex >= 0) {
+                const snapshot = timelineState.phases[timelineState.currentIndex];
+                renderThoughtsForPhase(`${snapshot.dayNumber}_${snapshot.phase}`, snapshot);
+            }
             break;
             
         case 'PHASE_CHANGE':
-            updatePhase(data.data.phase);
+            gameState.phase = data.data.phase;
+            gameState.dayNumber = data.data.day_number;
+            currentPhaseKey = `${data.data.day_number}_${data.data.phase}`;
+            
+            if (!thoughtsByPhase[currentPhaseKey]) {
+                thoughtsByPhase[currentPhaseKey] = [];
+            }
+            
+            const newPhase = {
+                phase: data.data.phase,
+                dayNumber: data.data.day_number,
+                players: JSON.parse(JSON.stringify(gameState.players)),
+                events: []
+            };
+            
+            timelineState.phases.push(newPhase);
+            timelineState.liveIndex = timelineState.phases.length - 1;
+            
+            if (timelineState.isLive) {
+                timelineState.currentIndex = timelineState.liveIndex;
+                navigateToPhase(timelineState.currentIndex);
+            }
+            
+            renderTimeline();
             break;
             
         case 'PLAYER_THOUGHT':
             if (data.data.player_name === playerName) {
-                // Add the prompt as user message
-                addThought({role: 'user', content: data.data.prompt});
-                // Add the response as assistant message
-                addThought({
-                    role: 'assistant', 
+                const phaseKey = currentPhaseKey || `${gameState.dayNumber}_${gameState.phase}`;
+                
+                if (!thoughtsByPhase[phaseKey]) {
+                    thoughtsByPhase[phaseKey] = [];
+                }
+                
+                // Add user prompt
+                thoughtsByPhase[phaseKey].push({role: 'user', content: data.data.prompt});
+                
+                // Add assistant response
+                thoughtsByPhase[phaseKey].push({
+                    role: 'assistant',
                     content: data.data.response,
                     tool_calls: data.data.tool_calls
                 });
+                
+                // If viewing this phase, update display
+                if (timelineState.isLive || phaseKey === `${timelineState.phases[timelineState.currentIndex]?.dayNumber}_${timelineState.phases[timelineState.currentIndex]?.phase}`) {
+                    addThought({role: 'user', content: data.data.prompt});
+                    addThought({
+                        role: 'assistant',
+                        content: data.data.response,
+                        tool_calls: data.data.tool_calls
+                    });
+                }
             }
             break;
             
+        case 'PLAYER_DEATH':
+            const deadPlayer = gameState.players.find(p => p.name === data.data.player);
+            if (deadPlayer) deadPlayer.is_alive = false;
+            updatePlayers(gameState.players);
+            break;
+            
         case 'GAME_END':
-            addThought({role: 'user', content: `Game Over! ${data.data.winner} wins!`});
+            gameState.players = data.data.players;
+            
+            const gameOverPhase = {
+                phase: 'GAME_OVER',
+                dayNumber: gameState.dayNumber,
+                players: data.data.players,
+                events: []
+            };
+            
+            timelineState.phases.push(gameOverPhase);
+            timelineState.liveIndex = timelineState.phases.length - 1;
+            
+            if (timelineState.isLive) {
+                timelineState.currentIndex = timelineState.liveIndex;
+                navigateToPhase(timelineState.currentIndex);
+            }
+            
+            renderTimeline();
             break;
     }
 }
@@ -141,13 +413,40 @@ fetch(`/api/player/${playerName}/thoughts`)
         if (data.error) {
             thoughtsContainer.innerHTML = '<div class="error">Player not found</div>';
         } else {
+            // Store thoughts
+            const phaseKey = `${gameState.dayNumber}_${gameState.phase}`;
+            thoughtsByPhase[phaseKey] = data.thoughts || [];
+            
             thoughtsContainer.innerHTML = '';
-            data.thoughts.forEach(addThought);
+            (data.thoughts || []).forEach(t => addThought(t, false));
         }
     })
     .catch(e => {
         console.error('Initial load error:', e);
         thoughtsContainer.innerHTML = '<div class="thoughts-placeholder">Waiting for game...</div>';
+    });
+
+// Also fetch initial state for timeline
+fetch('/api/state')
+    .then(r => r.json())
+    .then(data => {
+        if (!data.error) {
+            gameState.players = data.players;
+            gameState.phase = data.phase;
+            gameState.dayNumber = data.day_number;
+            currentPhaseKey = `${data.day_number}_${data.phase}`;
+            
+            updatePlayers(data.players);
+            updatePhaseIndicator(data.phase, data.day_number);
+            
+            if (data.phase_history && data.phase_history.length > 0) {
+                timelineState.phases = data.phase_history;
+                timelineState.liveIndex = timelineState.phases.length - 1;
+                timelineState.currentIndex = timelineState.liveIndex;
+                timelineState.isLive = !data.winner;
+                renderTimeline();
+            }
+        }
     });
 </script>
 {% endblock %}

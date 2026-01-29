@@ -143,13 +143,17 @@ class EventType(Enum):
     PHASE_CHANGE = "PHASE_CHANGE"
     PUBLIC_MESSAGE = "PUBLIC_MESSAGE"
     NIGHT_ACTION = "NIGHT_ACTION"
+    NIGHT_REASONING = "NIGHT_REASONING"  # Full LLM reasoning for night actions
     NIGHT_RESULT = "NIGHT_RESULT"
     VOTE_CAST = "VOTE_CAST"
+    VOTE_REASONING = "VOTE_REASONING"  # Full LLM reasoning for votes
     VOTE_RESULT = "VOTE_RESULT"
     PLAYER_DEATH = "PLAYER_DEATH"
     GAME_END = "GAME_END"
     PLAYER_THOUGHT = "PLAYER_THOUGHT"  # For viewing player's internal state
     MAFIA_CHAT = "MAFIA_CHAT"  # Private mafia communication during night
+    MAFIA_KILL_INTENTION = "MAFIA_KILL_INTENTION"  # Mafia member's kill vote
+    GM_MESSAGE = "GM_MESSAGE"  # Game master narration messages
 
 
 @dataclass

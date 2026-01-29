@@ -14,7 +14,7 @@
 <!-- Timeline Navigation -->
 <div class="timeline-container">
     <div id="timeline" class="timeline">
-        <!-- Populated by JS -->
+        <span class="timeline-loading">Loading timeline...</span>
     </div>
 </div>
 
@@ -25,36 +25,22 @@
         <ul id="players-list" class="players-list">
             <!-- Populated by JS -->
         </ul>
+        <div class="back-button-container" id="back-button-container" style="display: none;">
+            <button id="back-to-square-btn" class="back-to-square-btn" onclick="backToTownSquare()">
+                ← Back to Town Square
+            </button>
+        </div>
     </aside>
 
-    <!-- Main Chat Area -->
-    <section class="chat-panel">
-        <h2>Town Square</h2>
-        <div id="chat-messages" class="chat-messages">
-            <div class="chat-placeholder">Waiting for game to start...</div>
+    <!-- Main Panel - Content changes by phase -->
+    <section class="main-panel" id="main-panel">
+        <div class="panel-header">
+            <h2 id="panel-title">Town Square</h2>
+        </div>
+        <div id="panel-content" class="panel-content">
+            <div class="panel-placeholder">Waiting for game to start...</div>
         </div>
     </section>
-
-    <!-- Events / Night Log Panel -->
-    <aside class="events-panel">
-        <h2>Game Log</h2>
-        <div id="game-log" class="game-log">
-            <!-- Populated by JS -->
-        </div>
-        
-        <h2>Votes</h2>
-        <div id="votes-display" class="votes-display">
-            <div class="vote-placeholder">No active vote</div>
-        </div>
-        
-        <!-- Mafia Chat (shown during night) -->
-        <div id="mafia-chat-panel" class="mafia-chat-panel" style="display: none;">
-            <h3>🔪 Mafia Private Chat</h3>
-            <div id="mafia-chat-messages" class="mafia-chat-messages">
-                <!-- Populated by JS -->
-            </div>
-        </div>
-    </aside>
 </main>
 
 <!-- Game Over Modal -->
@@ -65,7 +51,6 @@
         <div id="final-roles" class="final-roles"></div>
         <div class="modal-buttons">
             <button onclick="dismissModal()">View Game History</button>
-            <button onclick="location.reload()">New Game</button>
         </div>
     </div>
 </div>
@@ -78,51 +63,29 @@ let gameState = {
     phase: 'UNKNOWN',
     dayNumber: 0,
     players: [],
-    messages: [],
-    votes: {},
     winner: null
 };
 
-// Timeline state - stores snapshots at each phase
+// Timeline and phase tracking
 let timelineState = {
-    phases: [],          // Array of phase objects
-    currentIndex: -1,    // Currently viewing index (-1 = live)
-    isLive: true,        // Whether we're watching live
-    mafiaMessages: [],   // Mafia chat messages
-    nightActions: []     // Night actions for current phase
+    phases: [],           // Array of phase snapshots
+    currentIndex: -1,     // Currently viewing index
+    liveIndex: -1,        // Latest live phase index
+    isLive: true,         // Whether we're watching live
+    viewingPlayer: null   // Player name if viewing thoughts, null for town square
 };
 
-// Player colors - consistent colors for each player
+// Player colors
 const PLAYER_COLORS = {
-    'Alice': '#e74c3c',    // Red
-    'Bob': '#3498db',      // Blue
-    'Charlie': '#2ecc71',  // Green
-    'Diana': '#9b59b6',    // Purple
-    'Edward': '#f39c12',   // Orange
-    'Fiona': '#1abc9c',    // Teal
-    'George': '#e91e63',   // Pink
+    'Alice': '#e74c3c',
+    'Bob': '#3498db',
+    'Charlie': '#2ecc71',
+    'Diana': '#9b59b6',
+    'Edward': '#f39c12',
+    'Fiona': '#1abc9c',
+    'George': '#e91e63',
 };
 
-function getPlayerColor(name) {
-    return PLAYER_COLORS[name] || '#95a5a6';  // Default gray
-}
-
-// DOM elements
-const phaseIndicator = document.getElementById('phase-indicator');
-const phaseName = phaseIndicator.querySelector('.phase-name');
-const dayNumber = phaseIndicator.querySelector('.day-number');
-const playersList = document.getElementById('players-list');
-const chatMessages = document.getElementById('chat-messages');
-const gameLog = document.getElementById('game-log');
-const votesDisplay = document.getElementById('votes-display');
-const gameOverModal = document.getElementById('game-over-modal');
-const winnerText = document.getElementById('winner-text');
-const finalRoles = document.getElementById('final-roles');
-const timeline = document.getElementById('timeline');
-const mafiaChatPanel = document.getElementById('mafia-chat-panel');
-const mafiaChatMessages = document.getElementById('mafia-chat-messages');
-
-// Phase icons for timeline
 const PHASE_ICONS = {
     'NIGHT': '🌙',
     'DAY': '☀️',
@@ -130,10 +93,66 @@ const PHASE_ICONS = {
     'GAME_OVER': '🏁'
 };
 
+const ROLE_ICONS = {
+    'DETECTIVE': '🔍',
+    'DOCTOR': '💉',
+    'MAFIA': '🔪',
+    'TOWN': '🏠'
+};
+
+function getPlayerColor(name) {
+    return PLAYER_COLORS[name] || '#95a5a6';
+}
+
+// DOM elements
+const phaseIndicator = document.getElementById('phase-indicator');
+const phaseName = phaseIndicator.querySelector('.phase-name');
+const dayNumberEl = phaseIndicator.querySelector('.day-number');
+const playersList = document.getElementById('players-list');
+const timeline = document.getElementById('timeline');
+const mainPanel = document.getElementById('main-panel');
+const panelTitle = document.getElementById('panel-title');
+const panelContent = document.getElementById('panel-content');
+const gameOverModal = document.getElementById('game-over-modal');
+const winnerText = document.getElementById('winner-text');
+const finalRoles = document.getElementById('final-roles');
+const backButtonContainer = document.getElementById('back-button-container');
+
+// Escape HTML
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Update phase indicator
+function updatePhaseIndicator(phase, day) {
+    phaseIndicator.className = `phase-badge phase-${phase.toLowerCase()}`;
+    phaseName.textContent = phase;
+    if (day) {
+        dayNumberEl.textContent = `Day ${day}`;
+    }
+}
+
+// Update players list
+function updatePlayers(players) {
+    playersList.innerHTML = players.map(p => `
+        <li class="player-item ${p.is_alive ? 'alive' : 'dead'}">
+            <a href="javascript:void(0)" onclick="viewPlayerThoughts('${p.name}')" 
+               class="player-link" style="border-left: 4px solid ${getPlayerColor(p.name)}">
+                <span class="player-name" style="color: ${getPlayerColor(p.name)}">${p.name}</span>
+                <span class="player-role role-${p.role.toLowerCase()}">${p.role}</span>
+                <span class="player-status">${p.is_alive ? '🟢' : '💀'}</span>
+            </a>
+        </li>
+    `).join('');
+}
+
 // Render timeline
 function renderTimeline() {
     if (timelineState.phases.length === 0) {
-        timeline.innerHTML = '<span style="color: var(--text-muted); font-style: italic;">Game starting...</span>';
+        timeline.innerHTML = '<span class="timeline-loading">Waiting for game...</span>';
         return;
     }
     
@@ -150,8 +169,8 @@ function renderTimeline() {
             html += '<div class="timeline-connector"></div>';
         }
         
-        const isActive = (timelineState.isLive && idx === timelineState.phases.length - 1) || 
-                        (!timelineState.isLive && idx === timelineState.currentIndex);
+        const isActive = idx === timelineState.currentIndex;
+        const isLive = idx === timelineState.liveIndex && timelineState.isLive;
         
         html += `
             <div class="timeline-phase phase-${phase.phase.toLowerCase()} ${isActive ? 'active' : ''}" 
@@ -163,13 +182,13 @@ function renderTimeline() {
         `;
     });
     
-    // Add "Live" indicator if we're caught up
-    if (timelineState.isLive) {
+    // Add "Live" indicator
+    if (timelineState.isLive && timelineState.currentIndex === timelineState.liveIndex) {
         html += '<div class="timeline-connector"></div>';
         html += `
-            <div class="timeline-phase active" style="background: var(--accent-green); border-radius: 4px;">
-                <span class="timeline-phase-icon">📺</span>
-                <span class="timeline-phase-label" style="color: white;">LIVE</span>
+            <div class="timeline-live-indicator">
+                <span class="live-dot"></span>
+                <span>LIVE</span>
             </div>
         `;
     }
@@ -177,199 +196,340 @@ function renderTimeline() {
     timeline.innerHTML = html;
 }
 
-// Navigate to a specific phase in the timeline
+// Navigate to a specific phase
 function navigateToPhase(index) {
     if (index < 0 || index >= timelineState.phases.length) return;
     
     timelineState.currentIndex = index;
-    timelineState.isLive = (index === timelineState.phases.length - 1);
+    timelineState.isLive = (index === timelineState.liveIndex);
     
     const snapshot = timelineState.phases[index];
     
-    // Update UI to show this snapshot
-    updatePhase(snapshot.phase, snapshot.dayNumber);
+    // Update phase indicator
+    updatePhaseIndicator(snapshot.phase, snapshot.dayNumber);
+    
+    // Update players
     updatePlayers(snapshot.players);
     
-    // Show messages up to this point
-    chatMessages.innerHTML = '';
-    snapshot.messagesSnapshot.forEach(addChatMessage);
-    
-    // Show votes at this point
-    updateVotes(snapshot.votesSnapshot || {});
-    
-    // Show/hide mafia chat based on phase
-    if (snapshot.phase === 'NIGHT') {
-        showMafiaChat(snapshot.mafiaMessagesSnapshot || [], snapshot.nightActionsSnapshot || []);
+    // Render main panel based on phase type and whether viewing player
+    if (timelineState.viewingPlayer) {
+        renderPlayerThoughts(timelineState.viewingPlayer, snapshot);
     } else {
-        hideMafiaChat();
+        renderPhaseContent(snapshot);
     }
     
     renderTimeline();
 }
 
-// Go live (latest state)
-function goLive() {
-    timelineState.isLive = true;
-    timelineState.currentIndex = timelineState.phases.length - 1;
-    navigateToPhase(timelineState.currentIndex);
-}
-
-// Add a phase to the timeline
-function addPhaseToTimeline(phase, dayNum) {
-    // Snapshot current state
-    const snapshot = {
-        phase: phase,
-        dayNumber: dayNum,
-        players: JSON.parse(JSON.stringify(gameState.players)),
-        messagesSnapshot: [...gameState.messages],
-        votesSnapshot: {...gameState.votes},
-        mafiaMessagesSnapshot: [...timelineState.mafiaMessages],
-        nightActionsSnapshot: [...timelineState.nightActions]
-    };
-    
-    timelineState.phases.push(snapshot);
-    
-    // Clear mafia messages and night actions for new phase
-    if (phase !== 'NIGHT') {
-        timelineState.mafiaMessages = [];
-        timelineState.nightActions = [];
-    }
-    
-    if (timelineState.isLive) {
-        timelineState.currentIndex = timelineState.phases.length - 1;
-    }
-    
-    renderTimeline();
-}
-
-// Show mafia chat panel
-function showMafiaChat(messages, nightActions) {
-    mafiaChatPanel.style.display = 'block';
+// Render main panel content based on phase
+function renderPhaseContent(snapshot) {
+    panelTitle.textContent = `${snapshot.phase} - Day ${snapshot.dayNumber}`;
+    backButtonContainer.style.display = 'none';
     
     let html = '';
     
-    // Show mafia chat messages
-    if (messages.length > 0) {
-        html += '<div style="margin-bottom: 0.75rem; color: var(--text-muted); font-size: 0.8rem;">Private discussion:</div>';
-        messages.forEach(msg => {
+    if (snapshot.phase === 'NIGHT') {
+        html = renderNightPhase(snapshot);
+    } else if (snapshot.phase === 'DAY') {
+        html = renderDayPhase(snapshot);
+    } else if (snapshot.phase === 'VOTING') {
+        html = renderVotingPhase(snapshot);
+    } else if (snapshot.phase === 'GAME_OVER') {
+        html = renderGameOver(snapshot);
+    } else {
+        html = '<div class="panel-placeholder">Unknown phase</div>';
+    }
+    
+    panelContent.innerHTML = html;
+}
+
+// Render night phase
+function renderNightPhase(snapshot) {
+    let html = '';
+    const events = snapshot.events || [];
+    
+    // Group events by type for proper ordering
+    const gmMessages = events.filter(e => e.type === 'gm_message');
+    const detectiveReasoning = events.find(e => e.type === 'night_reasoning' && e.role === 'DETECTIVE');
+    const doctorReasoning = events.find(e => e.type === 'night_reasoning' && e.role === 'DOCTOR');
+    const mafiaChats = events.filter(e => e.type === 'mafia_chat');
+    const killIntentions = events.filter(e => e.type === 'kill_intention');
+    
+    // Opening GM message
+    html += renderGmMessage("Night falls over the town. Detective, open your eyes.");
+    
+    // Detective section
+    if (detectiveReasoning) {
+        html += renderNightActionBlock('DETECTIVE', detectiveReasoning);
+    }
+    
+    html += renderGmMessage("Detective, close your eyes. Doctor, open your eyes.");
+    
+    // Doctor section
+    if (doctorReasoning) {
+        html += renderNightActionBlock('DOCTOR', doctorReasoning);
+    }
+    
+    html += renderGmMessage("Doctor, close your eyes. Mafia, open your eyes.");
+    
+    // Mafia section
+    html += '<div class="night-section mafia-section">';
+    html += '<div class="section-header"><span class="role-icon">🔪</span> MAFIA DISCUSSION</div>';
+    html += '<div class="section-content">';
+    
+    // Mafia chat messages
+    for (const chat of mafiaChats) {
+        html += `
+            <div class="mafia-message">
+                <span class="msg-sender" style="color: ${getPlayerColor(chat.sender)}">[${chat.sender}]</span>
+                <span class="msg-content">${escapeHtml(chat.content)}</span>
+            </div>
+        `;
+    }
+    
+    // Kill intentions
+    if (killIntentions.length > 0) {
+        html += '<div class="kill-intentions">';
+        for (const intention of killIntentions) {
             html += `
-                <div class="mafia-message">
-                    <span class="msg-sender">${msg.sender}:</span>
+                <div class="kill-intention">
+                    <span class="player-name" style="color: ${getPlayerColor(intention.player)}">${intention.player}</span>
+                    <span class="intention-arrow">→ Kill:</span>
+                    <span class="target-name" style="color: ${getPlayerColor(intention.target)}">${intention.target}</span>
+                </div>
+            `;
+        }
+        html += '</div>';
+    }
+    
+    html += '</div></div>';
+    
+    // Night result GM message
+    const nightResult = events.find(e => e.type === 'night_result');
+    const deathEvent = events.find(e => e.type === 'death' && e.cause === 'killed_by_mafia');
+    
+    html += renderGmMessage("Mafia, close your eyes. The sun rises over the town.");
+    
+    if (deathEvent) {
+        const alignment = deathEvent.was_mafia ? "Mafia" : "not Mafia";
+        html += renderGmMessage(`${deathEvent.player} was found dead. They were ${alignment}.`);
+    } else if (nightResult && nightResult.saved) {
+        html += renderGmMessage("The doctor saved someone during the night. No one died.");
+    } else {
+        html += renderGmMessage("The night passes peacefully. No one died.");
+    }
+    
+    return html;
+}
+
+// Render night action block (Detective/Doctor)
+function renderNightActionBlock(role, data) {
+    const icon = ROLE_ICONS[role] || '❓';
+    const roleClass = role.toLowerCase();
+    
+    let html = `
+        <div class="night-section ${roleClass}-section">
+            <div class="section-header">
+                <span class="role-icon">${icon}</span> 
+                ${role} - ${data.player}
+            </div>
+            <div class="section-content">
+    `;
+    
+    if (data.reasoning) {
+        html += `
+            <div class="reasoning-block">
+                <div class="reasoning-label">Reasoning:</div>
+                <div class="reasoning-text">"${escapeHtml(data.reasoning)}"</div>
+            </div>
+        `;
+    }
+    
+    html += `
+        <div class="action-block">
+            <span class="action-label">[night_action]</span>
+            <span class="action-target">target: "${data.target}"</span>
+        </div>
+    `;
+    
+    if (data.result) {
+        html += `
+            <div class="result-block">
+                <span class="result-label">Result:</span>
+                <span class="result-text">${escapeHtml(data.result)}</span>
+            </div>
+        `;
+    }
+    
+    html += '</div></div>';
+    return html;
+}
+
+// Render GM message
+function renderGmMessage(content) {
+    return `
+        <div class="gm-message">
+            <span class="gm-icon">📜</span>
+            <span class="gm-text">${escapeHtml(content)}</span>
+        </div>
+    `;
+}
+
+// Render day phase
+function renderDayPhase(snapshot) {
+    let html = '';
+    const messages = snapshot.messages || [];
+    
+    if (messages.length === 0) {
+        html = '<div class="panel-placeholder">No discussion yet...</div>';
+    } else {
+        for (const msg of messages) {
+            const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString() : '';
+            html += `
+                <div class="chat-message" style="border-left-color: ${getPlayerColor(msg.sender)}">
+                    <span class="msg-time">${time}</span>
+                    <span class="msg-sender" style="color: ${getPlayerColor(msg.sender)}">${msg.sender}:</span>
                     <span class="msg-content">${escapeHtml(msg.content)}</span>
                 </div>
             `;
-        });
+        }
     }
     
-    // Show night actions
-    if (nightActions.length > 0) {
-        html += '<div style="margin-top: 0.75rem; margin-bottom: 0.5rem; color: var(--text-muted); font-size: 0.8rem;">Night actions:</div>';
-        nightActions.forEach(action => {
-            const actionIcon = action.role === 'MAFIA' ? '🔪' : 
-                              action.role === 'DOCTOR' ? '💉' : 
-                              action.role === 'DETECTIVE' ? '🔍' : '❓';
+    return html;
+}
+
+// Render voting phase
+function renderVotingPhase(snapshot) {
+    let html = '';
+    const events = snapshot.events || [];
+    const votes = events.filter(e => e.type === 'vote');
+    const voteResult = events.find(e => e.type === 'vote_result');
+    
+    html += renderGmMessage("The town gathers to vote. Each player will cast their vote.");
+    
+    html += '<div class="votes-container">';
+    
+    for (const vote of votes) {
+        html += `
+            <div class="vote-block">
+                <div class="vote-header">
+                    <span class="voter-name" style="color: ${getPlayerColor(vote.voter)}">${vote.voter}</span>
+                </div>
+                <div class="vote-reasoning">"${escapeHtml(vote.reasoning || 'No reasoning provided')}"</div>
+                <div class="vote-target">
+                    <span class="votes-label">VOTES:</span>
+                    <span class="target-name" style="color: ${getPlayerColor(vote.target)}">${vote.target}</span>
+                </div>
+            </div>
+        `;
+    }
+    
+    html += '</div>';
+    
+    // Vote tally
+    if (votes.length > 0) {
+        const tally = {};
+        for (const vote of votes) {
+            tally[vote.target] = (tally[vote.target] || 0) + 1;
+        }
+        
+        html += '<div class="vote-tally">';
+        html += '<div class="tally-header">VOTE TALLY</div>';
+        const sorted = Object.entries(tally).sort((a, b) => b[1] - a[1]);
+        for (const [target, count] of sorted) {
+            const voters = votes.filter(v => v.target === target).map(v => v.voter).join(', ');
             html += `
-                <div class="mafia-message" style="border-color: ${action.role === 'MAFIA' ? 'var(--accent-red)' : 'var(--accent-blue)'};">
-                    <span>${actionIcon}</span>
-                    <span class="msg-sender">${action.player}</span>
-                    <span>→ ${action.target}</span>
+                <div class="tally-row">
+                    <span class="tally-name" style="color: ${getPlayerColor(target)}">${target}:</span>
+                    <span class="tally-count">${count} vote${count !== 1 ? 's' : ''}</span>
+                    <span class="tally-voters">(${voters})</span>
                 </div>
             `;
-        });
+        }
+        html += '</div>';
     }
     
-    if (!html) {
-        html = '<div style="color: var(--text-muted); font-style: italic;">Waiting for night actions...</div>';
+    // Result
+    if (voteResult) {
+        if (voteResult.lynched) {
+            const deathEvent = events.find(e => e.type === 'death' && e.cause === 'lynched');
+            const alignment = deathEvent?.was_mafia ? "MAFIA" : "not Mafia";
+            html += renderGmMessage(`The votes are tallied. ${voteResult.lynched} was lynched. They were ${alignment}.`);
+        } else if (voteResult.was_tie) {
+            html += renderGmMessage("The votes are tallied. The vote was tied. Nobody was lynched.");
+        } else {
+            html += renderGmMessage("The votes are tallied. No valid votes were cast. Nobody was lynched.");
+        }
     }
     
-    mafiaChatMessages.innerHTML = html;
+    return html;
 }
 
-// Hide mafia chat panel
-function hideMafiaChat() {
-    mafiaChatPanel.style.display = 'none';
-}
-
-// Update phase indicator
-function updatePhase(phase, day) {
-    phaseIndicator.className = `phase-badge phase-${phase.toLowerCase()}`;
-    phaseName.textContent = phase;
-    if (day) {
-        dayNumber.textContent = `Day ${day}`;
-    }
-}
-
-// Update players list
-function updatePlayers(players) {
-    playersList.innerHTML = players.map(p => `
-        <li class="player-item ${p.is_alive ? 'alive' : 'dead'}">
-            <a href="/player/${p.name}" target="_blank" class="player-link" style="border-left: 4px solid ${getPlayerColor(p.name)}">
+// Render game over
+function renderGameOver(snapshot) {
+    let html = '<div class="game-over-content">';
+    
+    const winner = gameState.winner || 'UNKNOWN';
+    html += `<div class="winner-banner">${winner} WINS!</div>`;
+    
+    html += '<div class="final-roles-list">';
+    for (const p of snapshot.players) {
+        html += `
+            <div class="final-player ${p.is_alive ? 'alive' : 'dead'}">
                 <span class="player-name" style="color: ${getPlayerColor(p.name)}">${p.name}</span>
-                <span class="player-status">${p.is_alive ? '🟢' : '💀'}</span>
-                ${p.role ? `<span class="player-role">${p.role}</span>` : ''}
-            </a>
-        </li>
-    `).join('');
-}
-
-// Add a chat message
-function addChatMessage(msg) {
-    // Remove placeholder if present
-    const placeholder = chatMessages.querySelector('.chat-placeholder');
-    if (placeholder) placeholder.remove();
-    
-    const time = new Date(msg.timestamp).toLocaleTimeString();
-    const senderColor = getPlayerColor(msg.sender);
-    const msgEl = document.createElement('div');
-    msgEl.className = 'chat-message';
-    msgEl.style.borderLeftColor = senderColor;
-    msgEl.innerHTML = `
-        <span class="msg-time">${time}</span>
-        <span class="msg-sender" style="color: ${senderColor}">${msg.sender}:</span>
-        <span class="msg-content">${escapeHtml(msg.content)}</span>
-    `;
-    chatMessages.appendChild(msgEl);
-    // Don't auto-scroll - let user control the view
-}
-
-// Add a game log entry
-function addLogEntry(text, type = 'info') {
-    const entry = document.createElement('div');
-    entry.className = `log-entry log-${type}`;
-    entry.innerHTML = `
-        <span class="log-time">${new Date().toLocaleTimeString()}</span>
-        <span class="log-text">${text}</span>
-    `;
-    gameLog.appendChild(entry);
-    // Don't auto-scroll - let user control the view
-}
-
-// Update votes display
-function updateVotes(votes) {
-    if (Object.keys(votes).length === 0) {
-        votesDisplay.innerHTML = '<div class="vote-placeholder">No votes yet</div>';
-        return;
+                <span class="player-role role-${p.role.toLowerCase()}">${p.role}</span>
+                <span class="player-status">${p.is_alive ? 'Survived' : 'Dead'}</span>
+            </div>
+        `;
     }
+    html += '</div>';
     
-    // Count votes
-    const voteCounts = {};
-    for (const [voter, target] of Object.entries(votes)) {
-        voteCounts[target] = (voteCounts[target] || 0) + 1;
+    html += '</div>';
+    return html;
+}
+
+// View player thoughts
+function viewPlayerThoughts(playerName) {
+    timelineState.viewingPlayer = playerName;
+    backButtonContainer.style.display = 'block';
+    
+    const snapshot = timelineState.phases[timelineState.currentIndex];
+    if (snapshot) {
+        renderPlayerThoughts(playerName, snapshot);
     }
+}
+
+// Back to town square
+function backToTownSquare() {
+    timelineState.viewingPlayer = null;
+    backButtonContainer.style.display = 'none';
     
-    // Sort by vote count
-    const sorted = Object.entries(voteCounts).sort((a, b) => b[1] - a[1]);
+    const snapshot = timelineState.phases[timelineState.currentIndex];
+    if (snapshot) {
+        renderPhaseContent(snapshot);
+    }
+}
+
+// Render player thoughts (placeholder - needs API call)
+function renderPlayerThoughts(playerName, snapshot) {
+    panelTitle.textContent = `${playerName}'s Thoughts - ${snapshot.phase} Day ${snapshot.dayNumber}`;
     
-    votesDisplay.innerHTML = sorted.map(([name, count]) => `
-        <div class="vote-bar">
-            <span class="vote-name" style="color: ${getPlayerColor(name)}">${name}</span>
-            <div class="vote-count-bar" style="width: ${count * 20}%; background: ${getPlayerColor(name)}"></div>
-            <span class="vote-count">${count}</span>
+    panelContent.innerHTML = `
+        <div class="player-thoughts-container">
+            <div class="thoughts-header">
+                <span style="color: ${getPlayerColor(playerName)}">${playerName}</span>'s internal state during ${snapshot.phase}
+            </div>
+            <div class="thoughts-content">
+                <p class="thoughts-placeholder">
+                    Player thought history is available during live games.
+                    Click on different phases in the timeline to see thoughts from that phase.
+                </p>
+            </div>
         </div>
-    `).join('');
+    `;
 }
 
-// Show game over
+// Show game over modal
 function showGameOver(winner, players) {
     winnerText.textContent = `${winner} Wins!`;
     finalRoles.innerHTML = players.map(p => `
@@ -382,18 +542,39 @@ function showGameOver(winner, players) {
     gameOverModal.classList.remove('hidden');
 }
 
-// Dismiss the game over modal
+// Dismiss modal
 function dismissModal(event) {
-    // If called with event (backdrop click), only close if clicking the backdrop itself
     if (event && event.target !== gameOverModal) return;
     gameOverModal.classList.add('hidden');
 }
 
-// Escape HTML
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+// Add a new phase to timeline (for live updates)
+function addPhaseToTimeline(phaseData) {
+    timelineState.phases.push(phaseData);
+    timelineState.liveIndex = timelineState.phases.length - 1;
+    
+    // Auto-advance if watching live
+    if (timelineState.isLive || timelineState.currentIndex === -1) {
+        timelineState.currentIndex = timelineState.liveIndex;
+        timelineState.isLive = true;
+        navigateToPhase(timelineState.currentIndex);
+    }
+    
+    renderTimeline();
+}
+
+// Update current phase with new event (for live updates)
+function updateCurrentPhase(event) {
+    if (timelineState.phases.length === 0) return;
+    
+    const currentPhase = timelineState.phases[timelineState.liveIndex];
+    if (!currentPhase.events) currentPhase.events = [];
+    currentPhase.events.push(event);
+    
+    // Re-render if viewing this phase
+    if (timelineState.isLive && timelineState.currentIndex === timelineState.liveIndex && !timelineState.viewingPlayer) {
+        renderPhaseContent(currentPhase);
+    }
 }
 
 // Handle SSE events
@@ -405,26 +586,19 @@ function handleEvent(event) {
         case 'INITIAL_STATE':
             // Load initial state (replay mode)
             gameState.players = data.data.players;
-            gameState.messages = data.data.messages || [];
-            gameState.votes = data.data.current_votes || {};
             gameState.phase = data.data.phase;
             gameState.dayNumber = data.data.day_number;
+            gameState.winner = data.data.winner;
             
-            // Load timeline from phase_history if available
-            if (data.data.phase_history) {
+            // Load timeline from phase_history
+            if (data.data.phase_history && data.data.phase_history.length > 0) {
                 timelineState.phases = data.data.phase_history;
-                timelineState.currentIndex = timelineState.phases.length - 1;
+                timelineState.liveIndex = timelineState.phases.length - 1;
+                timelineState.currentIndex = timelineState.liveIndex;
                 timelineState.isLive = false;
+                
                 renderTimeline();
-                // Navigate to the last phase
-                if (timelineState.phases.length > 0) {
-                    navigateToPhase(timelineState.phases.length - 1);
-                }
-            } else {
-                updatePhase(data.data.phase, data.data.day_number);
-                updatePlayers(data.data.players);
-                data.data.messages.forEach(addChatMessage);
-                updateVotes(data.data.current_votes || {});
+                navigateToPhase(timelineState.currentIndex);
             }
             
             if (data.data.winner) {
@@ -433,97 +607,97 @@ function handleEvent(event) {
             break;
             
         case 'GAME_START':
-            addLogEntry('Game started!', 'start');
             gameState.players = data.data.players;
             updatePlayers(data.data.players);
             break;
             
         case 'PHASE_CHANGE':
-            // Add current phase to timeline before switching
-            addPhaseToTimeline(data.data.phase, data.data.day_number);
-            
             gameState.phase = data.data.phase;
             gameState.dayNumber = data.data.day_number;
             
-            if (timelineState.isLive) {
-                updatePhase(data.data.phase, data.data.day_number);
-                addLogEntry(`Phase: ${data.data.phase} (Day ${data.data.day_number})`, 'phase');
-                
-                if (data.data.phase === 'VOTING') {
-                    gameState.votes = {};
-                    updateVotes({});
-                    hideMafiaChat();
-                } else if (data.data.phase === 'NIGHT') {
-                    showMafiaChat([], []);
-                } else if (data.data.phase === 'DAY') {
-                    hideMafiaChat();
-                }
-            }
+            // Create new phase snapshot
+            const newPhase = {
+                phase: data.data.phase,
+                dayNumber: data.data.day_number,
+                players: JSON.parse(JSON.stringify(gameState.players)),
+                events: [],
+                messages: [],
+                votes: {},
+                gmMessages: []
+            };
+            
+            addPhaseToTimeline(newPhase);
             break;
             
-        case 'PUBLIC_MESSAGE':
-            gameState.messages.push(data.data);
-            if (timelineState.isLive) {
-                addChatMessage(data.data);
-            }
+        case 'GM_MESSAGE':
+            updateCurrentPhase({type: 'gm_message', ...data.data});
             break;
             
-        case 'NIGHT_ACTION':
-            timelineState.nightActions.push(data.data);
-            addLogEntry(`[SECRET] ${data.data.role}: ${data.data.player} targets ${data.data.target}`, 'night');
-            if (timelineState.isLive && gameState.phase === 'NIGHT') {
-                showMafiaChat(timelineState.mafiaMessages, timelineState.nightActions);
-            }
+        case 'NIGHT_REASONING':
+            updateCurrentPhase({type: 'night_reasoning', ...data.data});
             break;
             
         case 'MAFIA_CHAT':
-            // Handle mafia private chat messages
-            timelineState.mafiaMessages.push(data.data);
-            if (timelineState.isLive && gameState.phase === 'NIGHT') {
-                showMafiaChat(timelineState.mafiaMessages, timelineState.nightActions);
+            updateCurrentPhase({type: 'mafia_chat', ...data.data});
+            break;
+            
+        case 'MAFIA_KILL_INTENTION':
+            updateCurrentPhase({type: 'kill_intention', ...data.data});
+            break;
+            
+        case 'PUBLIC_MESSAGE':
+            // Add to current phase messages
+            if (timelineState.phases.length > 0) {
+                const phase = timelineState.phases[timelineState.liveIndex];
+                if (!phase.messages) phase.messages = [];
+                phase.messages.push({type: 'message', ...data.data});
+                updateCurrentPhase({type: 'message', ...data.data});
             }
             break;
             
-        case 'NIGHT_RESULT':
-            if (data.data.killed) {
-                addLogEntry(`${data.data.killed} was killed by the mafia!`, 'death');
-            } else if (data.data.saved) {
-                addLogEntry(`Someone was saved by the doctor!`, 'save');
-            } else {
-                addLogEntry('No one died during the night.', 'info');
-            }
-            break;
-            
-        case 'VOTE_CAST':
-            gameState.votes[data.data.voter] = data.data.target;
-            if (timelineState.isLive) {
-                updateVotes(gameState.votes);
-            }
-            addLogEntry(`${data.data.voter} voted for ${data.data.target}`, 'vote');
+        case 'VOTE_REASONING':
+            updateCurrentPhase({type: 'vote', ...data.data});
             break;
             
         case 'VOTE_RESULT':
-            if (data.data.lynched) {
-                addLogEntry(`${data.data.lynched} was lynched! They were ${data.data.lynched_role || 'unknown'}.`, 'death');
-            } else if (data.data.was_tie) {
-                addLogEntry('Vote was tied. No one was lynched.', 'info');
-            }
-            gameState.votes = {};
+            updateCurrentPhase({type: 'vote_result', ...data.data});
+            break;
+            
+        case 'NIGHT_RESULT':
+            updateCurrentPhase({type: 'night_result', ...data.data});
             break;
             
         case 'PLAYER_DEATH':
-            addLogEntry(`${data.data.player} died (${data.data.cause})`, 'death');
-            // Update player in gameState
+            // Update player status
             const deadPlayer = gameState.players.find(p => p.name === data.data.player);
             if (deadPlayer) deadPlayer.is_alive = false;
-            if (timelineState.isLive) {
-                updatePlayers(gameState.players);
+            
+            // Update in current phase
+            if (timelineState.phases.length > 0) {
+                const phase = timelineState.phases[timelineState.liveIndex];
+                phase.players = JSON.parse(JSON.stringify(gameState.players));
             }
+            
+            updateCurrentPhase({type: 'death', ...data.data});
+            updatePlayers(gameState.players);
             break;
             
         case 'GAME_END':
-            addPhaseToTimeline('GAME_OVER', gameState.dayNumber);
+            gameState.winner = data.data.winner;
             gameState.players = data.data.players;
+            
+            // Add final phase
+            const gameOverPhase = {
+                phase: 'GAME_OVER',
+                dayNumber: gameState.dayNumber,
+                players: data.data.players,
+                events: [],
+                messages: [],
+                votes: {},
+                gmMessages: []
+            };
+            addPhaseToTimeline(gameOverPhase);
+            
             showGameOver(data.data.winner, data.data.players);
             break;
     }
@@ -534,7 +708,6 @@ const evtSource = new EventSource('/events');
 evtSource.onmessage = handleEvent;
 evtSource.onerror = function(e) {
     console.error('SSE error:', e);
-    addLogEntry('Connection lost. Reconnecting...', 'error');
 };
 
 // Initial load
@@ -542,11 +715,12 @@ fetch('/api/state')
     .then(r => r.json())
     .then(data => {
         if (data.error) {
-            addLogEntry('Waiting for game to start...', 'info');
+            panelContent.innerHTML = '<div class="panel-placeholder">Waiting for game to start...</div>';
         } else {
-            updatePhase(data.phase, data.day_number);
+            gameState.players = data.players;
+            gameState.phase = data.phase;
+            gameState.dayNumber = data.day_number;
             updatePlayers(data.players);
-            data.messages.forEach(addChatMessage);
         }
     })
     .catch(e => console.error('Initial load error:', e));

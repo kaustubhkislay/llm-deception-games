@@ -382,12 +382,14 @@ class PlayerAgent:
         self._running = False
         print(f"[{self.player.name}] Day phase ended")
     
-    async def run_voting_phase(self, living_players: list[str], messages: Optional[list[PublicMessage]] = None) -> Optional[str]:
-        """Run the voting phase and return the player's vote."""
+    async def run_voting_phase(self, living_players: list[str], messages: Optional[list[PublicMessage]] = None) -> tuple[Optional[str], Optional[str]]:
+        """Run the voting phase and return (vote_target, reasoning) tuple."""
         print(f"[{self.player.name}] Starting voting phase")
         
         prompt = get_voting_phase_prompt(self.player, living_players, messages)
         response = await self._call_llm(prompt, VOTING_TOOLS)
+        
+        reasoning = response.content  # Capture the LLM's reasoning
         
         if response.tool_calls:
             for tool_call in response.tool_calls:
@@ -403,13 +405,13 @@ class PlayerAgent:
                 if result.startswith("VOTE:"):
                     vote_target = result[5:]
                     print(f"[{self.player.name}] Voted for {vote_target}")
-                    return vote_target
+                    return (vote_target, reasoning)
         
         print(f"[{self.player.name}] Failed to cast vote")
-        return None
+        return (None, reasoning)
     
-    async def run_night_phase(self, living_players: list[str]) -> Optional[str]:
-        """Run the night phase and return the night action target (if any)."""
+    async def run_night_phase(self, living_players: list[str]) -> tuple[Optional[str], Optional[str]]:
+        """Run the night phase and return (target, reasoning) tuple."""
         print(f"[{self.player.name}] Starting night phase")
         
         # Town members have no night action
@@ -422,12 +424,14 @@ class PlayerAgent:
                 role="assistant", 
                 content="I'll wait and see what happens tonight. Hopefully the doctor protects the right person."
             ))
-            return None
+            return (None, None)
         
         # Pass last_protected to doctor's prompt
         last_protected = self._last_protected if self.player.role == Role.DOCTOR else None
         prompt = get_night_phase_prompt(self.player, living_players, last_protected)
         response = await self._call_llm(prompt, NIGHT_TOOLS)
+        
+        reasoning = response.content  # Capture the LLM's reasoning
         
         if response.tool_calls:
             for tool_call in response.tool_calls:
@@ -448,10 +452,10 @@ class PlayerAgent:
                     if self.player.role == Role.DOCTOR:
                         self._last_protected = target
                     
-                    return target
+                    return (target, reasoning)
         
         print(f"[{self.player.name}] No night action taken")
-        return None
+        return (None, reasoning)
     
     def add_game_event(self, event_description: str) -> None:
         """Add a game event to the player's chat history."""

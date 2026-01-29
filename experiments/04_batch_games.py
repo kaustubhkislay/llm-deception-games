@@ -183,16 +183,16 @@ class QuietMafiaGame(MafiaGame):
         
         for player in self.state.living_players:
             if player.role == Role.DOCTOR:
-                target = await self.agents[player.name].run_night_phase(living_names)
+                target, reasoning = await self.agents[player.name].run_night_phase(living_names)
                 doctor_target = target
                 self.logger.info(f"  DOCTOR protects: {target}")
-                self.event_log.log_event("NIGHT_ACTION", {"role": "DOCTOR", "player": player.name, "target": target})
+                self.event_log.log_event("NIGHT_REASONING", {"role": "DOCTOR", "player": player.name, "target": target, "reasoning": reasoning})
                 
             elif player.role == Role.DETECTIVE:
-                target = await self.agents[player.name].run_night_phase(living_names)
+                target, reasoning = await self.agents[player.name].run_night_phase(living_names)
                 detective_target = target
                 self.logger.info(f"  DETECTIVE investigates: {target}")
-                self.event_log.log_event("NIGHT_ACTION", {"role": "DETECTIVE", "player": player.name, "target": target})
+                self.event_log.log_event("NIGHT_REASONING", {"role": "DETECTIVE", "player": player.name, "target": target, "reasoning": reasoning})
                 
             elif player.role == Role.TOWN:
                 await self.agents[player.name].run_night_phase(living_names)
@@ -310,7 +310,7 @@ class QuietMafiaGame(MafiaGame):
         
         votes = {}
         for player in self.state.living_players:
-            vote = await self.agents[player.name].run_voting_phase(living_names, self.state.public_messages)
+            vote, reasoning = await self.agents[player.name].run_voting_phase(living_names, self.state.public_messages)
             if vote and vote in living_names:
                 votes[player.name] = vote
                 self.state.current_votes[player.name] = vote
@@ -374,10 +374,10 @@ class QuietMafiaGame(MafiaGame):
         
         if len(living_mafia) == 1:
             mafia = living_mafia[0]
-            target = await self.agents[mafia.name].run_night_phase(living_names)
+            target, reasoning = await self.agents[mafia.name].run_night_phase(living_names)
             if target:
                 self.logger.info(f"  MAFIA {mafia.name} targets: {target}")
-                self.event_log.log_event("NIGHT_ACTION", {"role": "MAFIA", "player": mafia.name, "target": target})
+                self.event_log.log_event("NIGHT_REASONING", {"role": "MAFIA", "player": mafia.name, "target": target, "reasoning": reasoning})
             return target
         
         # Multiple mafia
