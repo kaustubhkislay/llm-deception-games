@@ -289,28 +289,44 @@ function handleEvent(event) {
         case 'INITIAL_STATE':
             gameState.players = data.data.players;
             gameState.phase = data.data.phase;
-            gameState.dayNumber = data.data.day_number;
+            gameState.dayNumber = data.data.day_number || 1;
+            
+            // Initialize current phase key
+            currentPhaseKey = `${gameState.dayNumber}_${gameState.phase}`;
             
             if (data.data.phase_history && data.data.phase_history.length > 0) {
                 timelineState.phases = data.data.phase_history;
                 timelineState.liveIndex = timelineState.phases.length - 1;
                 timelineState.currentIndex = timelineState.liveIndex;
-                timelineState.isLive = false;
+                timelineState.isLive = !data.data.winner; // Live if no winner yet
                 
                 renderTimeline();
                 navigateToPhase(timelineState.currentIndex);
+            } else {
+                // No phase history yet - create initial phase
+                const initialPhase = {
+                    phase: gameState.phase,
+                    dayNumber: gameState.dayNumber,
+                    players: data.data.players || [],
+                    events: []
+                };
+                timelineState.phases.push(initialPhase);
+                timelineState.liveIndex = 0;
+                timelineState.currentIndex = 0;
+                timelineState.isLive = true;
+                renderTimeline();
+                navigateToPhase(0);
             }
             break;
             
         case 'INITIAL_THOUGHTS':
-            // Group thoughts by phase - for now put all in current phase
-            const initialPhaseKey = `${gameState.dayNumber}_${gameState.phase}`;
+            // Store thoughts in current phase key
+            const initialPhaseKey = currentPhaseKey || `${gameState.dayNumber}_${gameState.phase}`;
             thoughtsByPhase[initialPhaseKey] = data.data.thoughts || [];
             
-            if (timelineState.currentIndex >= 0) {
-                const snapshot = timelineState.phases[timelineState.currentIndex];
-                renderThoughtsForPhase(`${snapshot.dayNumber}_${snapshot.phase}`, snapshot);
-            }
+            // Also display them immediately
+            thoughtsContainer.innerHTML = '';
+            (data.data.thoughts || []).forEach(t => addThought(t, false));
             break;
             
         case 'PHASE_CHANGE':
@@ -348,24 +364,29 @@ function handleEvent(event) {
                     thoughtsByPhase[phaseKey] = [];
                 }
                 
-                // Add user prompt
-                thoughtsByPhase[phaseKey].push({role: 'user', content: data.data.prompt});
-                
-                // Add assistant response
-                thoughtsByPhase[phaseKey].push({
+                const userThought = {role: 'user', content: data.data.prompt};
+                const assistantThought = {
                     role: 'assistant',
                     content: data.data.response,
                     tool_calls: data.data.tool_calls
-                });
+                };
                 
-                // If viewing this phase, update display
-                if (timelineState.isLive || phaseKey === `${timelineState.phases[timelineState.currentIndex]?.dayNumber}_${timelineState.phases[timelineState.currentIndex]?.phase}`) {
-                    addThought({role: 'user', content: data.data.prompt});
-                    addThought({
-                        role: 'assistant',
-                        content: data.data.response,
-                        tool_calls: data.data.tool_calls
-                    });
+                // Add to storage
+                thoughtsByPhase[phaseKey].push(userThought);
+                thoughtsByPhase[phaseKey].push(assistantThought);
+                
+                // Determine if we should display - viewing current phase or live
+                const viewingPhaseKey = timelineState.currentIndex >= 0 
+                    ? `${timelineState.phases[timelineState.currentIndex]?.dayNumber}_${timelineState.phases[timelineState.currentIndex]?.phase}`
+                    : null;
+                
+                if (timelineState.isLive || phaseKey === viewingPhaseKey) {
+                    // Remove placeholder if present
+                    const placeholder = thoughtsContainer.querySelector('.thoughts-placeholder');
+                    if (placeholder) placeholder.remove();
+                    
+                    addThought(userThought);
+                    addThought(assistantThought);
                 }
             }
             break;

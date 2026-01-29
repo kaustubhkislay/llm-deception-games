@@ -345,7 +345,8 @@ VOTING_TOOLS = [VOTE_TOOL]
 NIGHT_TOOLS = [NIGHT_ACTION_TOOL]
 
 # Mafia coordination tools
-MAFIA_DISCUSSION_TOOLS = [MAFIA_CHAT_TOOL, WAIT_FOR_MESSAGES_TOOL]
+# Mafia discussion includes ability to set kill intention (can be changed during discussion)
+MAFIA_DISCUSSION_TOOLS = [MAFIA_CHAT_TOOL, MAFIA_VOTE_TOOL, WAIT_FOR_MESSAGES_TOOL]
 MAFIA_VOTE_TOOLS = [MAFIA_VOTE_TOOL]
 
 

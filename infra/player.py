@@ -234,6 +234,7 @@ class PlayerAgent:
         # Mafia coordination callbacks (set during mafia phase)
         self._mafia_send_callback: Optional[Callable[[str, str], Awaitable[None]]] = None
         self._mafia_message_event: Optional[asyncio.Event] = None
+        self._mafia_intention_callback: Optional[Callable[[str, str], Awaitable[None]]] = None
         
         # Initialize chat history with system prompt
         self.player.chat_history = [
@@ -243,8 +244,49 @@ class PlayerAgent:
             )
         ]
     
+    def _cleanup_dangling_tool_calls(self) -> None:
+        """Remove any assistant messages with tool_calls that don't have corresponding tool responses."""
+        if not self.player.chat_history:
+            return
+        
+        # Find all tool_call_ids that have responses
+        responded_ids = set()
+        for msg in self.player.chat_history:
+            if msg.role == "tool" and msg.tool_call_id:
+                responded_ids.add(msg.tool_call_id)
+        
+        # Check the last assistant message
+        cleaned_history = []
+        for i, msg in enumerate(self.player.chat_history):
+            if msg.role == "assistant" and msg.tool_calls:
+                # Check if all tool calls have responses
+                all_responded = all(
+                    tc.get("id") in responded_ids 
+                    for tc in msg.tool_calls
+                )
+                if not all_responded:
+                    # Add dummy tool responses for missing ones
+                    cleaned_history.append(msg)
+                    for tc in msg.tool_calls:
+                        if tc.get("id") not in responded_ids:
+                            cleaned_history.append(ChatMessage(
+                                role="tool",
+                                content="[Task cancelled]",
+                                tool_call_id=tc.get("id")
+                            ))
+                            responded_ids.add(tc.get("id"))
+                else:
+                    cleaned_history.append(msg)
+            else:
+                cleaned_history.append(msg)
+        
+        self.player.chat_history = cleaned_history
+    
     async def _call_llm(self, prompt: str, tools: list[dict]) -> LLMResponse:
         """Make an LLM call with the current chat history."""
+        # Clean up any dangling tool calls from cancelled tasks
+        self._cleanup_dangling_tool_calls()
+        
         # Add the prompt as a user message
         self.player.chat_history.append(ChatMessage(role="user", content=prompt))
         
@@ -467,11 +509,13 @@ class PlayerAgent:
     def set_mafia_callbacks(
         self,
         send_callback: Callable[[str, str], Awaitable[None]],
-        message_event: asyncio.Event
+        message_event: asyncio.Event,
+        intention_callback: Optional[Callable[[str, str], Awaitable[None]]] = None
     ) -> None:
         """Set the mafia coordination callbacks."""
         self._mafia_send_callback = send_callback
         self._mafia_message_event = message_event
+        self._mafia_intention_callback = intention_callback
     
     async def run_mafia_discussion(
         self,
@@ -479,10 +523,11 @@ class PlayerAgent:
         other_mafia: list[str],
         get_mafia_messages: Callable[[], list[dict]],
         phase_end_event: asyncio.Event,
-    ) -> None:
-        """Run the mafia discussion phase."""
+    ) -> Optional[str]:
+        """Run the mafia discussion phase. Returns the player's final kill intention."""
         self._running = True
         last_seen_count = 0
+        self._current_kill_intention: Optional[str] = None
         print(f"[{self.player.name}] Starting mafia discussion")
         
         targets = [p for p in living_players if p != self.player.name and p not in other_mafia]
@@ -493,21 +538,33 @@ class PlayerAgent:
             new_messages = mafia_messages[last_seen_count:]
             last_seen_count = len(mafia_messages)
             
-            # Build prompt
+            # Build prompt with current intentions visible
             messages_xml = ""
             if new_messages:
                 messages_xml = "\n<new_mafia_messages>\n"
                 for msg in new_messages:
-                    messages_xml += f"  <message sender='{msg['sender']}'>{msg['content']}</message>\n"
+                    if msg.get("type") == "intention":
+                        messages_xml += f"  <kill_intention player='{msg['sender']}' target='{msg['target']}'/>\n"
+                    else:
+                        messages_xml += f"  <message sender='{msg['sender']}'>{msg['content']}</message>\n"
                 messages_xml += "</new_mafia_messages>"
+            
+            current_intention = f"\n<your_current_intention>{self._current_kill_intention or 'Not set'}</your_current_intention>"
             
             prompt = f"""<phase>NIGHT - MAFIA COORDINATION</phase>
 <your_team>MAFIA</your_team>
 <teammates>{', '.join(other_mafia) if other_mafia else 'You are the only mafia'}</teammates>
-<potential_targets>{', '.join(targets)}</potential_targets>
+<potential_targets>{', '.join(targets)}</potential_targets>{current_intention}
 {messages_xml}
 
-Discuss with your mafia partners who to kill tonight. Use mafia_chat to communicate privately, or wait_for_messages to see what your partners say."""
+Coordinate with your mafia partners on who to kill tonight. IMPORTANT: You must use mafia_kill_vote to lock in your kill target before time runs out.
+
+Available actions:
+1. mafia_chat - Send a message to your partners (they will see it)
+2. mafia_kill_vote - Set who you want to kill (REQUIRED - can be changed)
+3. wait_for_messages - Wait for your partners to respond
+
+Strategy: Discuss briefly, then both vote for the same target using mafia_kill_vote. If you don't vote, no kill happens!"""
             
             try:
                 response = await asyncio.wait_for(
@@ -524,18 +581,32 @@ Discuss with your mafia partners who to kill tonight. Use mafia_chat to communic
                             tool_call_id=tool_call["id"]
                         ))
                         
+                        # Handle kill vote - update intention and broadcast
+                        if result.startswith("MAFIA_VOTE:"):
+                            target = result[11:]
+                            self._current_kill_intention = target
+                            print(f"  [{self.player.name}] Sets kill intention: {target}")
+                            
+                            # Broadcast intention to other mafia via callback
+                            if self._mafia_intention_callback:
+                                await self._mafia_intention_callback(self.player.name, target)
+                            
+                            # Continue discussion - don't break
+                            continue
+                        
                         if result == "New messages have arrived. Check the chat.":
                             # Continue discussion loop
                             continue
                 
             except asyncio.TimeoutError:
-                print(f"  [{self.player.name}] LLM call timed out, ending discussion")
-                break
+                print(f"  [{self.player.name}] LLM call timed out, continuing...")
+                continue
             except asyncio.CancelledError:
                 break
         
         self._running = False
-        print(f"[{self.player.name}] Mafia discussion ended")
+        print(f"[{self.player.name}] Mafia discussion ended, intention: {self._current_kill_intention}")
+        return self._current_kill_intention
     
     async def run_mafia_vote(self, living_players: list[str], other_mafia: list[str]) -> Optional[str]:
         """Vote on who the mafia should kill."""
