@@ -446,10 +446,33 @@ class MafiaGame:
             return None
         
         if len(living_mafia) == 1:
-            # Single mafia - just pick a target directly
+            # Single mafia - pick a target but still show reasoning
             mafia = living_mafia[0]
+            print(f"\n  --- MAFIA COORDINATION (single mafia) ---")
             target, reasoning = await self.agents[mafia.name].run_night_phase(living_names)
+            
+            # Broadcast the mafia's reasoning as a chat message
+            if reasoning:
+                print(f"    [MAFIA CHAT] {mafia.name}: {reasoning}")
+                self.logger.info(f"    MAFIA CHAT: {mafia.name}: {reasoning}")
+                await self.broadcaster.broadcast(
+                    GameEvent(
+                        event_type=EventType.MAFIA_CHAT,
+                        data={
+                            "sender": mafia.name,
+                            "content": reasoning,
+                            "timestamp": datetime.now().isoformat()
+                        }
+                    )
+                )
+                self.event_log.log_event("MAFIA_CHAT", {
+                    "sender": mafia.name,
+                    "content": reasoning,
+                    "timestamp": datetime.now().isoformat()
+                })
+            
             if target:
+                print(f"    [MAFIA INTENTION] {mafia.name} → {target}")
                 self.logger.info(f"  MAFIA {mafia.name} targets: {target}")
                 await self.broadcaster.broadcast(
                     GameEvent(
