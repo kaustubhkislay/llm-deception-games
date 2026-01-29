@@ -84,6 +84,9 @@ def load_game_from_log(log_path: str) -> dict:
     # Track phase history for timeline
     phase_history: list[dict] = []
     
+    # Track player thoughts for replay
+    player_thoughts: dict[str, dict[str, list]] = {}  # {player_name: {phase_key: [thoughts]}}
+    
     # Current phase accumulator
     current_phase_events: list[dict] = []
     current_phase_messages: list[dict] = []
@@ -272,6 +275,29 @@ def load_game_from_log(log_path: str) -> dict:
                 if phase_history:
                     phase_history[-1]["events"] = list(current_phase_events)
             
+            elif event_type == "PLAYER_THOUGHT":
+                # Track player thoughts for replay
+                player_name = data.get("player_name")
+                thought_phase = data.get("phase", phase)
+                thought_day = data.get("day_number", day_number)
+                phase_key = f"{thought_day}_{thought_phase}"
+                
+                if player_name not in player_thoughts:
+                    player_thoughts[player_name] = {}
+                if phase_key not in player_thoughts[player_name]:
+                    player_thoughts[player_name][phase_key] = []
+                
+                # Add prompt and response as separate thought entries
+                player_thoughts[player_name][phase_key].append({
+                    "role": "user",
+                    "content": data.get("prompt")
+                })
+                player_thoughts[player_name][phase_key].append({
+                    "role": "assistant", 
+                    "content": data.get("response"),
+                    "tool_calls": data.get("tool_calls")
+                })
+            
             elif event_type == "GAME_END":
                 winner = data.get("winner")
                 # Update final player states from game end data
@@ -300,6 +326,7 @@ def load_game_from_log(log_path: str) -> dict:
         "current_votes": {k: v.get("target") for k, v in all_votes.items()},
         "winner": winner,
         "phase_history": phase_history,
+        "player_thoughts": player_thoughts,
     }
 
 
@@ -360,6 +387,7 @@ class MafiaGame:
                 message_queue=self._message_queues[player.name],
                 send_message_callback=self._send_message,
                 new_message_event=self._new_message_event,
+                log_thought_callback=lambda data: self.event_log.log_event("PLAYER_THOUGHT", data),
             )
         
         # Log game initialization

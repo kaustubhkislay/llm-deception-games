@@ -63,7 +63,8 @@ let gameState = {
     phase: 'UNKNOWN',
     dayNumber: 0,
     players: [],
-    winner: null
+    winner: null,
+    playerThoughts: {}
 };
 
 // Timeline and phase tracking
@@ -502,20 +503,90 @@ function backToTownSquare() {
     }
 }
 
-// Render player thoughts (placeholder - needs API call)
+// Render player thoughts from gameState.playerThoughts
 function renderPlayerThoughts(playerName, snapshot) {
     panelTitle.textContent = `${playerName}'s Thoughts - ${snapshot.phase} Day ${snapshot.dayNumber}`;
+    
+    const phaseKey = `${snapshot.dayNumber}_${snapshot.phase}`;
+    const playerThoughts = gameState.playerThoughts || {};
+    const thoughts = (playerThoughts[playerName] && playerThoughts[playerName][phaseKey]) || [];
+    
+    console.log('renderPlayerThoughts:', playerName, phaseKey, 'found', thoughts.length, 'thoughts');
+    
+    if (thoughts.length === 0) {
+        // Find phases where this player HAS thoughts
+        const playerPhases = playerThoughts[playerName] || {};
+        const phasesWithThoughts = Object.entries(playerPhases)
+            .filter(([k, v]) => v && v.length > 0)
+            .map(([k, v]) => `${k} (${v.length})`);
+        
+        let explanation = '';
+        if (snapshot.phase === 'NIGHT') {
+            // Find this player's role
+            const player = gameState.players.find(p => p.name === playerName);
+            if (player && player.role === 'TOWN') {
+                explanation = '<br><em>Town members have no night action and thus no thoughts during night.</em>';
+            }
+        }
+        
+        panelContent.innerHTML = `
+            <div class="player-thoughts-container">
+                <div class="thoughts-header">
+                    <span style="color: ${getPlayerColor(playerName)}">${playerName}</span>'s internal state during ${snapshot.phase}
+                </div>
+                <div class="thoughts-content">
+                    <p class="thoughts-placeholder">
+                        No thoughts recorded for ${playerName} during this phase.
+                        ${explanation}
+                        <br><br><small>Phases with thoughts: ${phasesWithThoughts.length > 0 ? phasesWithThoughts.join(', ') : 'none'}</small>
+                    </p>
+                </div>
+            </div>
+        `;
+        return;
+    }
+    
+    // Render actual thoughts
+    let thoughtsHtml = '';
+    for (const thought of thoughts) {
+        let label = '';
+        let cssClass = `thought-${thought.role}`;
+        
+        if (thought.role === 'system') {
+            label = 'System Prompt';
+        } else if (thought.role === 'user') {
+            label = 'Game Update';
+        } else if (thought.role === 'assistant') {
+            label = 'Thinking';
+        } else if (thought.role === 'tool') {
+            label = 'Tool Result';
+        }
+        
+        let toolCallsHtml = '';
+        if (thought.tool_calls && thought.tool_calls.length > 0) {
+            toolCallsHtml = thought.tool_calls.map(tc => {
+                let args = tc.function?.arguments || '';
+                try { args = JSON.stringify(JSON.parse(args)); } catch {}
+                return `<div class="tool-call"><span class="tool-name">[${tc.function?.name}]</span> ${escapeHtml(args)}</div>`;
+            }).join('');
+        }
+        
+        thoughtsHtml += `
+            <div class="thought-message ${cssClass}">
+                <div class="thought-label">${label}</div>
+                <div class="thought-content">${thought.content ? escapeHtml(thought.content) : '<em>No verbal response</em>'}</div>
+                ${toolCallsHtml}
+            </div>
+        `;
+    }
     
     panelContent.innerHTML = `
         <div class="player-thoughts-container">
             <div class="thoughts-header">
-                <span style="color: ${getPlayerColor(playerName)}">${playerName}</span>'s internal state during ${snapshot.phase}
+                <span style="color: ${getPlayerColor(playerName)}">${playerName}</span>'s internal state during ${snapshot.phase} Day ${snapshot.dayNumber}
             </div>
             <div class="thoughts-content">
-                <p class="thoughts-placeholder">
-                    Player thought history is available during live games.
-                    Click on different phases in the timeline to see thoughts from that phase.
-                </p>
+                ${thoughtsHtml}
             </div>
         </div>
     `;
@@ -599,6 +670,7 @@ function handleEvent(event) {
             gameState.phase = data.data.phase;
             gameState.dayNumber = data.data.day_number || 1;
             gameState.winner = data.data.winner;
+            gameState.playerThoughts = data.data.player_thoughts || {};
             
             // Load timeline from phase_history if available
             if (data.data.phase_history && data.data.phase_history.length > 0) {
@@ -717,6 +789,42 @@ function handleEvent(event) {
             
             updateCurrentPhase({...data.data, type: 'death'});
             updatePlayers(gameState.players);
+            break;
+        
+        case 'PLAYER_THOUGHT':
+            // Update player thoughts in gameState
+            const thoughtPlayerName = data.data.player_name;
+            const thoughtPhase = data.data.phase || gameState.phase;
+            const thoughtDay = data.data.day_number || gameState.dayNumber;
+            const thoughtPhaseKey = `${thoughtDay}_${thoughtPhase}`;
+            
+            if (!gameState.playerThoughts[thoughtPlayerName]) {
+                gameState.playerThoughts[thoughtPlayerName] = {};
+            }
+            if (!gameState.playerThoughts[thoughtPlayerName][thoughtPhaseKey]) {
+                gameState.playerThoughts[thoughtPlayerName][thoughtPhaseKey] = [];
+            }
+            
+            // Add prompt and response
+            gameState.playerThoughts[thoughtPlayerName][thoughtPhaseKey].push({
+                role: 'user',
+                content: data.data.prompt
+            });
+            gameState.playerThoughts[thoughtPlayerName][thoughtPhaseKey].push({
+                role: 'assistant',
+                content: data.data.response,
+                tool_calls: data.data.tool_calls
+            });
+            
+            console.log('Added thought for', thoughtPlayerName, thoughtPhaseKey);
+            
+            // If viewing this player, refresh the view
+            if (timelineState.viewingPlayer === thoughtPlayerName) {
+                const snapshot = timelineState.phases[timelineState.currentIndex];
+                if (snapshot) {
+                    renderPlayerThoughts(thoughtPlayerName, snapshot);
+                }
+            }
             break;
             
         case 'GAME_END':

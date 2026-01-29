@@ -200,14 +200,30 @@ function navigateToPhase(index) {
 
 // Render thoughts for a specific phase
 function renderThoughtsForPhase(phaseKey, snapshot) {
+    console.log('renderThoughtsForPhase called:', {phaseKey, thoughtsByPhaseKeys: Object.keys(thoughtsByPhase)});
     panelTitle.textContent = `${playerName}'s Thoughts - ${snapshot.phase} Day ${snapshot.dayNumber}`;
     
     const thoughts = thoughtsByPhase[phaseKey] || [];
+    console.log('Thoughts for', phaseKey, ':', thoughts.length, 'messages', thoughts);
     
     if (thoughts.length === 0) {
+        // Find phases where this player HAS thoughts
+        const phasesWithThoughts = Object.entries(thoughtsByPhase)
+            .filter(([k, v]) => v && v.length > 0)
+            .map(([k, v]) => `${k} (${v.length})`);
+        
+        let explanation = '';
+        if (snapshot.phase === 'NIGHT') {
+            explanation = '<br><em>Town members have no night action and thus no thoughts during night.</em>';
+        } else if (snapshot.phase === 'VOTING') {
+            explanation = '<br><em>Voting phase uses a single tool call - thoughts may be brief.</em>';
+        }
+        
         thoughtsContainer.innerHTML = `
             <div class="thoughts-placeholder">
-                No thoughts recorded for ${playerName} during this phase.
+                No thoughts recorded for ${playerName} during ${snapshot.phase} phase.
+                ${explanation}
+                <br><br><small>Phases with thoughts: ${phasesWithThoughts.length > 0 ? phasesWithThoughts.join(', ') : 'none yet'}</small>
             </div>
         `;
         return;
@@ -295,9 +311,12 @@ function handleEvent(event) {
             currentPhaseKey = `${gameState.dayNumber}_${gameState.phase}`;
             
             // Load player thoughts if available
+            console.log('INITIAL_STATE received, player_thoughts:', data.data.player_thoughts ? Object.keys(data.data.player_thoughts) : 'NONE');
             if (data.data.player_thoughts && data.data.player_thoughts[playerName]) {
                 thoughtsByPhase = data.data.player_thoughts[playerName];
                 console.log('Loaded thoughts for', playerName, ':', Object.keys(thoughtsByPhase));
+            } else {
+                console.log('NO THOUGHTS for', playerName, 'in player_thoughts');
             }
             
             if (data.data.phase_history && data.data.phase_history.length > 0) {
@@ -333,6 +352,7 @@ function handleEvent(event) {
             break;
             
         case 'PHASE_CHANGE':
+            console.log('PHASE_CHANGE received:', data.data.phase, 'day', data.data.day_number, 'isLive:', timelineState.isLive);
             gameState.phase = data.data.phase;
             gameState.dayNumber = data.data.day_number;
             currentPhaseKey = `${data.data.day_number}_${data.data.phase}`;
@@ -426,54 +446,11 @@ function handleEvent(event) {
     }
 }
 
-// Connect to SSE
+// Connect to SSE - this sends INITIAL_STATE with all data including player_thoughts
 const evtSource = new EventSource(`/player/${playerName}/events`);
 evtSource.onmessage = handleEvent;
 evtSource.onerror = function(e) {
     console.error('SSE error:', e);
 };
-
-// Initial load
-fetch(`/api/player/${playerName}/thoughts`)
-    .then(r => r.json())
-    .then(data => {
-        if (data.error) {
-            thoughtsContainer.innerHTML = '<div class="error">Player not found</div>';
-        } else {
-            // Store thoughts
-            const phaseKey = `${gameState.dayNumber}_${gameState.phase}`;
-            thoughtsByPhase[phaseKey] = data.thoughts || [];
-            
-            thoughtsContainer.innerHTML = '';
-            (data.thoughts || []).forEach(t => addThought(t, false));
-        }
-    })
-    .catch(e => {
-        console.error('Initial load error:', e);
-        thoughtsContainer.innerHTML = '<div class="thoughts-placeholder">Waiting for game...</div>';
-    });
-
-// Also fetch initial state for timeline
-fetch('/api/state')
-    .then(r => r.json())
-    .then(data => {
-        if (!data.error) {
-            gameState.players = data.players;
-            gameState.phase = data.phase;
-            gameState.dayNumber = data.day_number;
-            currentPhaseKey = `${data.day_number}_${data.phase}`;
-            
-            updatePlayers(data.players);
-            updatePhaseIndicator(data.phase, data.day_number);
-            
-            if (data.phase_history && data.phase_history.length > 0) {
-                timelineState.phases = data.phase_history;
-                timelineState.liveIndex = timelineState.phases.length - 1;
-                timelineState.currentIndex = timelineState.liveIndex;
-                timelineState.isLive = !data.winner;
-                renderTimeline();
-            }
-        }
-    });
 </script>
 {% endblock %}

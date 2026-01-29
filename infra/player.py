@@ -254,12 +254,14 @@ class PlayerAgent:
         message_queue: asyncio.Queue,  # Queue to receive new messages
         send_message_callback: Callable[[str, str], Awaitable[None]],  # (player_name, content) -> send
         new_message_event: asyncio.Event,  # Event triggered when new message arrives
+        log_thought_callback: Optional[Callable[[dict], None]] = None,  # Callback to log thoughts
     ):
         self.player = player
         self.llm_client = llm_client
         self.message_queue = message_queue
         self.send_message_callback = send_message_callback
         self.new_message_event = new_message_event
+        self._log_thought_callback = log_thought_callback
         self._last_seen_message_id: Optional[str] = None
         self._running = False
         
@@ -346,21 +348,27 @@ class PlayerAgent:
         self.player.chat_history.append(assistant_msg)
         
         # Broadcast thought event for web viewer
+        thought_data = {
+            "player_name": self.player.name,
+            "prompt": prompt,
+            "response": response.content,
+            "tool_calls": response.tool_calls,
+            "phase": self._current_phase,
+            "day_number": self._current_day
+        }
+        
         broadcaster = get_broadcaster()
         await broadcaster.broadcast(
             GameEvent(
                 event_type=EventType.PLAYER_THOUGHT,
-                data={
-                    "player_name": self.player.name,
-                    "prompt": prompt,
-                    "response": response.content,
-                    "tool_calls": response.tool_calls,
-                    "phase": self._current_phase,
-                    "day_number": self._current_day
-                }
+                data=thought_data
             ),
             channels=[f"player_{self.player.name}"]
         )
+        
+        # Also log for replay
+        if self._log_thought_callback:
+            self._log_thought_callback(thought_data)
         
         return response
     
