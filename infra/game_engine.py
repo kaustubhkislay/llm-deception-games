@@ -373,9 +373,25 @@ class MafiaGame:
             "players": [{"name": p.name, "role": p.role.value} for p in self.players]
         })
         
+        # Error tracking
+        self.errors: list[dict] = []  # List of error records
+        
         print(f"Game initialized with {len(self.players)} players:")
         for p in self.players:
             print(f"  - {p.name}: {p.role.value}")
+    
+    def _track_error(self, error_type: str, details: dict) -> None:
+        """Track an error for later analysis."""
+        error = {
+            "type": error_type,
+            "timestamp": datetime.now().isoformat(),
+            "day_number": self.state.day_number,
+            "phase": self.state.phase.value if self.state.phase else "UNKNOWN",
+            **details
+        }
+        self.errors.append(error)
+        self.logger.warning(f"Error tracked: {error_type} - {details}")
+        self.event_log.log_event("ERROR", error)
     
     async def _emit_gm_message(self, content: str) -> None:
         """Emit a game master narration message."""
@@ -421,7 +437,15 @@ class MafiaGame:
             "timestamp": msg.timestamp.isoformat()
         })
         
-        print(f"  [{msg.timestamp.strftime('%H:%M:%S')}] {sender_name}: {content}")
+        # Show elapsed time since phase start
+        elapsed_str = ""
+        if self.state.phase_start_time:
+            elapsed = (msg.timestamp - self.state.phase_start_time).total_seconds()
+            mins, secs = divmod(int(elapsed), 60)
+            elapsed_str = f"{mins}:{secs:02d}"
+        else:
+            elapsed_str = msg.timestamp.strftime('%H:%M:%S')
+        print(f"  [{elapsed_str}] {sender_name}: {content}")
     
     def _get_messages(self) -> list[PublicMessage]:
         """Get all public messages (used by player agents)."""
@@ -437,6 +461,11 @@ class MafiaGame:
         if living_mafia >= living_town:
             return "MAFIA"
         return None
+    
+    def _update_agents_phase(self, phase: str, day: int) -> None:
+        """Update all agents with the current phase info."""
+        for agent in self.agents.values():
+            agent.set_phase(phase, day)
     
     async def _run_mafia_coordination(self, living_names: list[str]) -> Optional[str]:
         """Run the mafia coordination phase. Returns kill target or None."""
@@ -617,6 +646,9 @@ class MafiaGame:
         self.state.phase_start_time = datetime.now()
         self.state.current_night_actions.clear()
         
+        # Update agents with phase info
+        self._update_agents_phase("NIGHT", self.state.day_number)
+        
         # Broadcast phase change
         await self.broadcaster.broadcast(
             GameEvent(
@@ -641,6 +673,18 @@ class MafiaGame:
         for player in self.state.living_players:
             if player.role == Role.DETECTIVE:
                 target, reasoning = await self.agents[player.name].run_night_phase(living_names)
+                
+                # Validate target
+                if target and target not in living_names:
+                    self._track_error("INVALID_NIGHT_ACTION", {
+                        "player": player.name,
+                        "role": "DETECTIVE",
+                        "target": target,
+                        "valid_targets": living_names,
+                        "reason": "Target not alive"
+                    })
+                    target = None  # Invalidate the target
+                
                 detective_target = target
                 self.logger.info(f"  DETECTIVE {player.name} investigates: {target}")
                 
@@ -678,6 +722,18 @@ class MafiaGame:
         for player in self.state.living_players:
             if player.role == Role.DOCTOR:
                 target, reasoning = await self.agents[player.name].run_night_phase(living_names)
+                
+                # Validate target
+                if target and target not in living_names:
+                    self._track_error("INVALID_NIGHT_ACTION", {
+                        "player": player.name,
+                        "role": "DOCTOR",
+                        "target": target,
+                        "valid_targets": living_names,
+                        "reason": "Target not alive"
+                    })
+                    target = None  # Invalidate the target
+                
                 doctor_target = target
                 self.logger.info(f"  DOCTOR {player.name} protects: {target}")
                 
@@ -808,6 +864,9 @@ class MafiaGame:
         self.state.phase_end_time = datetime.now() + timedelta(seconds=self.day_duration_seconds)
         self._phase_end_event.clear()
         
+        # Update agents with phase info
+        self._update_agents_phase("DAY", self.state.day_number)
+        
         # Broadcast phase change
         await self.broadcaster.broadcast(
             GameEvent(
@@ -837,6 +896,11 @@ class MafiaGame:
         living_names = [p.name for p in self.state.living_players]
         
         # Start all living players' day phase coroutines
+        # Get previous day's votes (if any) to show players
+        previous_votes: Optional[dict[str, str]] = None
+        if self.state.vote_results:
+            previous_votes = self.state.vote_results[-1].votes.copy()
+        
         player_tasks = []
         for player in self.state.living_players:
             task = asyncio.create_task(
@@ -844,6 +908,9 @@ class MafiaGame:
                     living_names,
                     self._get_messages,
                     self._phase_end_event,
+                    previous_votes=previous_votes,
+                    phase_start_time=self.state.phase_start_time,
+                    phase_duration_seconds=self.day_duration_seconds,
                 )
             )
             player_tasks.append(task)
@@ -875,6 +942,9 @@ class MafiaGame:
         self.state.phase_start_time = datetime.now()
         self.state.current_votes.clear()
         
+        # Update agents with phase info
+        self._update_agents_phase("VOTING", self.state.day_number)
+        
         # Broadcast phase change
         await self.broadcaster.broadcast(
             GameEvent(
@@ -894,16 +964,26 @@ class MafiaGame:
         # Emit GM message for voting
         await self._emit_gm_message("The town gathers to vote. Each player will cast their vote.")
         
+        # Valid vote targets: living players + "no_lynch"
+        valid_targets = set(living_names + ["no_lynch"])
+        
         # Collect votes from all living players (self-votes are allowed)
         votes: dict[str, str] = {}
         vote_reasonings: dict[str, str] = {}
+        invalid_votes: list[dict] = []
         
         for player in self.state.living_players:
             vote, reasoning = await self.agents[player.name].run_voting_phase(living_names, self.state.public_messages)
-            if vote and vote in living_names:
-                votes[player.name] = vote
+            
+            # Normalize vote (case-insensitive no_lynch)
+            normalized_vote = vote.lower() if vote and vote.lower() == "no_lynch" else vote
+            if normalized_vote and normalized_vote.lower() == "no_lynch":
+                normalized_vote = "no_lynch"
+            
+            if normalized_vote and normalized_vote in valid_targets:
+                votes[player.name] = normalized_vote
                 vote_reasonings[player.name] = reasoning or ""
-                self.state.current_votes[player.name] = vote
+                self.state.current_votes[player.name] = normalized_vote
                 
                 # Emit vote with reasoning
                 await self.broadcaster.broadcast(
@@ -911,51 +991,75 @@ class MafiaGame:
                         event_type=EventType.VOTE_REASONING,
                         data={
                             "voter": player.name, 
-                            "target": vote,
+                            "target": normalized_vote,
                             "reasoning": reasoning
                         }
                     )
                 )
                 self.event_log.log_event("VOTE_REASONING", {
                     "voter": player.name, 
-                    "target": vote,
+                    "target": normalized_vote,
                     "reasoning": reasoning
                 })
+            else:
+                # Track invalid votes for debugging
+                invalid_votes.append({
+                    "voter": player.name,
+                    "attempted_target": vote,
+                    "reason": "Target not in valid options"
+                })
+                self.logger.warning(f"Invalid vote from {player.name}: '{vote}' (not in {valid_targets})")
+                self.event_log.log_event("INVALID_VOTE", {
+                    "voter": player.name,
+                    "attempted_target": vote,
+                    "valid_options": list(valid_targets)
+                })
         
-        # Tally votes
+        # Tally votes - require strict majority to lynch
         vote_counts = Counter(votes.values())
         result = VoteResult(votes=votes)
+        num_voters = len(self.state.living_players)
+        majority_threshold = (num_voters // 2) + 1  # Strict majority
         
         if vote_counts:
             max_votes = max(vote_counts.values())
             top_voted = [name for name, count in vote_counts.items() if count == max_votes]
             
-            if len(top_voted) == 1:
-                # Clear winner - lynch them
+            # Check if we have a strict majority
+            if max_votes >= majority_threshold and len(top_voted) == 1:
                 lynched_name = top_voted[0]
-                lynched_player = self.state.get_player_by_name(lynched_name)
-                if lynched_player:
-                    result.lynched_player = lynched_player
-                    lynched_player.is_alive = False
-                    
-                    await self.broadcaster.broadcast(
-                        GameEvent(
-                            event_type=EventType.PLAYER_DEATH,
-                            data={
-                                "player": lynched_player.name,
-                                "cause": "lynched",
-                                "was_mafia": lynched_player.role == Role.MAFIA
-                            }
+                
+                # Check if "no_lynch" won
+                if lynched_name == "no_lynch":
+                    # No lynch - town voted to skip
+                    self.logger.info(f"Town voted to skip lynching ({max_votes}/{num_voters} votes)")
+                else:
+                    # Clear winner with majority - lynch them
+                    lynched_player = self.state.get_player_by_name(lynched_name)
+                    if lynched_player:
+                        result.lynched_player = lynched_player
+                        lynched_player.is_alive = False
+                        
+                        await self.broadcaster.broadcast(
+                            GameEvent(
+                                event_type=EventType.PLAYER_DEATH,
+                                data={
+                                    "player": lynched_player.name,
+                                    "cause": "lynched",
+                                    "was_mafia": lynched_player.role == Role.MAFIA
+                                }
+                            )
                         )
-                    )
-                    self.event_log.log_event("PLAYER_DEATH", {
-                        "player": lynched_player.name,
-                        "cause": "lynched",
-                        "was_mafia": lynched_player.role == Role.MAFIA
-                    })
+                        self.event_log.log_event("PLAYER_DEATH", {
+                            "player": lynched_player.name,
+                            "cause": "lynched",
+                            "was_mafia": lynched_player.role == Role.MAFIA
+                        })
             else:
-                # Tie - no lynch
-                result.was_tie = True
+                # No majority or tie - no lynch
+                result.was_tie = len(top_voted) > 1
+                if max_votes < majority_threshold:
+                    self.logger.info(f"No majority reached ({max_votes}/{num_voters}, need {majority_threshold}). No lynch.")
         
         # Store result
         self.state.vote_results.append(result)
@@ -979,8 +1083,12 @@ class MafiaGame:
             announcement = f"{result.lynched_player.name} was lynched. They were {alignment}."
         elif result.was_tie:
             announcement = "The vote was tied. Nobody was lynched."
+        elif votes and vote_counts.get("no_lynch", 0) > 0:
+            # Check if no_lynch had votes but didn't reach majority
+            no_lynch_votes = vote_counts.get("no_lynch", 0)
+            announcement = f"No majority reached. {no_lynch_votes} voted no_lynch. Nobody was lynched."
         else:
-            announcement = "No valid votes were cast. Nobody was lynched."
+            announcement = "No majority reached. Nobody was lynched."
         
         await self._emit_gm_message(f"The votes are tallied. {announcement}")
         
@@ -1102,9 +1210,20 @@ class MafiaGame:
             "players": [
                 {"name": p.name, "role": p.role.value, "is_alive": p.is_alive}
                 for p in self.players
-            ]
+            ],
+            "errors": self.errors
         })
         self.event_log.close()
+        
+        # Print error summary
+        if self.errors:
+            print(f"\n⚠️ ERRORS ENCOUNTERED ({len(self.errors)} total):")
+            by_type: dict[str, int] = {}
+            for err in self.errors:
+                err_type = err.get("type", "UNKNOWN")
+                by_type[err_type] = by_type.get(err_type, 0) + 1
+            for err_type, count in sorted(by_type.items()):
+                print(f"   {err_type}: {count}")
         
         return winner
     
@@ -1184,6 +1303,32 @@ class MafiaGame:
                 "gmMessages": []
             })
         
+        # Build player thoughts grouped by phase from PLAYER_THOUGHT events
+        player_thoughts: dict[str, dict[str, list]] = {}  # {player_name: {phase_key: [thoughts]}}
+        for event in event_history:
+            event_dict = event.to_dict()
+            if event_dict.get("event_type") == "PLAYER_THOUGHT":
+                data = event_dict.get("data", {})
+                player_name = data.get("player_name")
+                phase = data.get("phase", "UNKNOWN")
+                day = data.get("day_number", 1)
+                phase_key = f"{day}_{phase}"
+                
+                if player_name not in player_thoughts:
+                    player_thoughts[player_name] = {}
+                if phase_key not in player_thoughts[player_name]:
+                    player_thoughts[player_name][phase_key] = []
+                
+                player_thoughts[player_name][phase_key].append({
+                    "role": "user",
+                    "content": data.get("prompt")
+                })
+                player_thoughts[player_name][phase_key].append({
+                    "role": "assistant",
+                    "content": data.get("response"),
+                    "tool_calls": data.get("tool_calls")
+                })
+        
         return {
             "phase": self.state.phase.value,
             "day_number": self.state.day_number,
@@ -1208,4 +1353,5 @@ class MafiaGame:
             "current_votes": self.state.current_votes,
             "winner": self.state.winner,
             "phase_history": phase_history,
+            "player_thoughts": player_thoughts,
         }

@@ -266,13 +266,13 @@ VOTE_TOOL = {
     "type": "function",
     "function": {
         "name": "cast_vote",
-        "description": "Cast your vote for who should be lynched. You must vote for a living player.",
+        "description": "Cast your vote for who should be lynched. Vote for a living player's name, or 'no_lynch' to vote against lynching anyone.",
         "parameters": {
             "type": "object",
             "properties": {
                 "target": {
                     "type": "string",
-                    "description": "The name of the player you want to vote to lynch"
+                    "description": "The name of the player you want to vote to lynch, or 'no_lynch' to skip"
                 }
             },
             "required": ["target"]

@@ -209,27 +209,20 @@ def player_events(player_name: str):
     def generate() -> Generator[str, None, None]:
         q = _subscribe_to_events()
         try:
-            # Send initial thoughts
+            # Send initial state (for timeline)
             if _game:
-                thoughts = _game.get_player_thoughts(player_name)
-                initial_thoughts = json.dumps({
-                    "event_type": "INITIAL_THOUGHTS",
+                initial_state = json.dumps({
+                    "event_type": "INITIAL_STATE",
                     "timestamp": datetime.now().isoformat(),
-                    "data": {
-                        "player_name": player_name,
-                        "thoughts": [
-                            {"role": t.role, "content": t.content, "tool_calls": t.tool_calls}
-                            for t in thoughts
-                        ]
-                    }
+                    "data": _game.get_game_state_dict()
                 })
             else:
-                initial_thoughts = json.dumps({
-                    "event_type": "INITIAL_THOUGHTS",
+                initial_state = json.dumps({
+                    "event_type": "INITIAL_STATE",
                     "timestamp": datetime.now().isoformat(),
-                    "data": {"player_name": player_name, "thoughts": []}
+                    "data": {"phase": "WAITING", "players": [], "phase_history": [], "player_thoughts": {}}
                 })
-            yield f"data: {initial_thoughts}\n\n"
+            yield f"data: {initial_state}\n\n"
             
             # Stream events
             while True:

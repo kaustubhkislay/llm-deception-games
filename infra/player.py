@@ -95,7 +95,10 @@ def get_day_phase_prompt(
     living_players: list[str], 
     messages_so_far: list[PublicMessage],
     last_seen_count: int = 0,
-    is_first_prompt: bool = True
+    is_first_prompt: bool = True,
+    previous_votes: Optional[dict[str, str]] = None,
+    phase_start_time: Optional[datetime] = None,
+    phase_duration_seconds: int = 300
 ) -> str:
     """Generate the prompt for the day discussion phase.
     
@@ -105,8 +108,27 @@ def get_day_phase_prompt(
         messages_so_far: All messages in the chat so far
         last_seen_count: How many messages the player has already seen
         is_first_prompt: Whether this is the first prompt of the day phase
+        previous_votes: Dict of voter -> target from previous day's vote (if any)
+        phase_start_time: When this phase started (for relative timestamps)
+        phase_duration_seconds: How long this phase lasts
     """
     other_players = [p for p in living_players if p != player.name]
+    
+    # Calculate elapsed time
+    def format_elapsed(msg_time: datetime) -> str:
+        if phase_start_time:
+            elapsed = (msg_time - phase_start_time).total_seconds()
+            mins, secs = divmod(int(elapsed), 60)
+            return f"{mins}:{secs:02d}"
+        return msg_time.strftime("%H:%M:%S")
+    
+    # Build previous votes summary if available
+    previous_votes_xml = ""
+    if previous_votes and is_first_prompt:
+        previous_votes_xml = "\n<previous_day_votes>\n"
+        for voter, target in sorted(previous_votes.items()):
+            previous_votes_xml += f'  <vote voter="{voter}" target="{target}"/>\n'
+        previous_votes_xml += "</previous_day_votes>\n"
     
     # Build XML-structured message view
     if is_first_prompt:
@@ -114,12 +136,13 @@ def get_day_phase_prompt(
         if messages_so_far:
             messages_xml = "\n<town_square>\n"
             for msg in messages_so_far:
-                messages_xml += f'  <message sender="{msg.sender_name}" time="{msg.timestamp.strftime("%H:%M:%S")}">{msg.content}</message>\n'
+                messages_xml += f'  <message sender="{msg.sender_name}" time="{format_elapsed(msg.timestamp)}">{msg.content}</message>\n'
             messages_xml += "</town_square>"
         else:
             messages_xml = "\n<town_square>\n  <!-- No messages yet. You may be the first to speak! -->\n</town_square>"
         
-        return f"""It is now DAYTIME. You have 5 minutes to discuss with the other players.
+        duration_mins = phase_duration_seconds // 60
+        return f"""It is now DAYTIME. You have {duration_mins} minutes to discuss with the other players before voting begins.{previous_votes_xml}
 
 <game_state>
   <living_players>{', '.join(living_players)}</living_players>
@@ -136,12 +159,20 @@ Briefly summarize your current thinking (1-2 sentences), then use send_message t
         if new_messages:
             messages_xml = "\n<new_messages>\n"
             for msg in new_messages:
-                messages_xml += f'  <message sender="{msg.sender_name}" time="{msg.timestamp.strftime("%H:%M:%S")}">{msg.content}</message>\n'
+                messages_xml += f'  <message sender="{msg.sender_name}" time="{format_elapsed(msg.timestamp)}">{msg.content}</message>\n'
             messages_xml += "</new_messages>"
         else:
             messages_xml = "\n<new_messages>\n  <!-- No new messages -->\n</new_messages>"
         
-        return f"""Discussion continues. {len(new_messages)} new message(s) since you last checked.
+        # Calculate time remaining
+        time_remaining = ""
+        if phase_start_time:
+            elapsed = (datetime.now() - phase_start_time).total_seconds()
+            remaining = max(0, phase_duration_seconds - elapsed)
+            mins, secs = divmod(int(remaining), 60)
+            time_remaining = f" (~{mins}:{secs:02d} remaining)"
+        
+        return f"""Discussion continues.{time_remaining} {len(new_messages)} new message(s) since you last checked.
 {messages_xml}
 
 Briefly summarize your thinking, then use send_message to speak or wait_for_messages to listen."""
@@ -159,12 +190,16 @@ def get_voting_phase_prompt(player: Player, living_players: list[str], messages:
             claims_summary += f"  {msg.sender_name}: {msg.content[:150]}{'...' if len(msg.content) > 150 else ''}\n"
         claims_summary += "</discussion_summary>\n"
     
+    vote_options = other_players + ["no_lynch"]
+    
     return f"""<phase>VOTING - Choose who to lynch</phase>
 
 <living_players>{', '.join(living_players)}</living_players>
-<vote_options>{', '.join(other_players)}</vote_options>
+<vote_options>{', '.join(vote_options)}</vote_options>
 {claims_summary}
 IMPORTANT: Review what was said during discussion. Did anyone claim to be Detective and identify a Mafia member? If so, strongly consider voting for the accused unless you have good reason not to. Scattered votes help Mafia win!
+
+You can vote for any player, or vote 'no_lynch' if you don't want anyone to be lynched today.
 
 Summarize your reasoning (who made accusations? who was accused? what evidence?), then use cast_vote."""
 
@@ -235,6 +270,10 @@ class PlayerAgent:
         self._mafia_send_callback: Optional[Callable[[str, str], Awaitable[None]]] = None
         self._mafia_message_event: Optional[asyncio.Event] = None
         self._mafia_intention_callback: Optional[Callable[[str, str], Awaitable[None]]] = None
+        
+        # Current phase tracking (for thought events)
+        self._current_phase: str = "NIGHT"
+        self._current_day: int = 1
         
         # Initialize chat history with system prompt
         self.player.chat_history = [
@@ -315,7 +354,9 @@ class PlayerAgent:
                     "player_name": self.player.name,
                     "prompt": prompt,
                     "response": response.content,
-                    "tool_calls": response.tool_calls
+                    "tool_calls": response.tool_calls,
+                    "phase": self._current_phase,
+                    "day_number": self._current_day
                 }
             ),
             channels=[f"player_{self.player.name}"]
@@ -366,6 +407,9 @@ class PlayerAgent:
         living_players: list[str],
         get_messages: Callable[[], list[PublicMessage]],
         phase_end_event: asyncio.Event,
+        previous_votes: Optional[dict[str, str]] = None,
+        phase_start_time: Optional[datetime] = None,
+        phase_duration_seconds: int = 300,
     ) -> None:
         """Run the player's day phase loop."""
         self._running = True
@@ -383,7 +427,10 @@ class PlayerAgent:
                 living_players, 
                 current_messages,
                 last_seen_count=last_seen_count,
-                is_first_prompt=is_first_prompt
+                is_first_prompt=is_first_prompt,
+                previous_votes=previous_votes if is_first_prompt else None,
+                phase_start_time=phase_start_time,
+                phase_duration_seconds=phase_duration_seconds,
             )
             
             # Update last seen count BEFORE the LLM call (blind writing)
@@ -505,6 +552,11 @@ class PlayerAgent:
             role="user",
             content=f"[GAME EVENT] {event_description}"
         ))
+    
+    def set_phase(self, phase: str, day: int) -> None:
+        """Set the current game phase for thought tracking."""
+        self._current_phase = phase
+        self._current_day = day
     
     def set_mafia_callbacks(
         self,
