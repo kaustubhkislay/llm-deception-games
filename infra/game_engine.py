@@ -81,7 +81,7 @@ def load_game_from_log(log_path: str) -> dict:
     
     def snapshot_players():
         return [
-            {"name": name, "role": info["current_role"], "original_role": info["original_role"]}
+            {"name": name, "current_role": info["current_role"], "original_role": info["original_role"]}
             for name, info in players.items()
         ]
     
@@ -178,7 +178,8 @@ def load_game_from_log(log_path: str) -> dict:
                     "id": data.get("id"),
                     "sender": data.get("sender"),
                     "content": data.get("content"),
-                    "timestamp": data.get("timestamp", timestamp)
+                    "timestamp": data.get("timestamp", timestamp),
+                    "round": data.get("round", 0)
                 }
                 all_messages.append(msg)
                 current_phase_messages.append(msg)
