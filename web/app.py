@@ -13,14 +13,14 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from infra.mafia import GameEvent
-from infra.game_engine import MafiaGame
+from infra.onuw import GameEvent
+from infra.game_engine import ONUWGame
 
 
 app = Flask(__name__)
 
 # Global game instance (set by run script)
-_game: Optional[MafiaGame] = None
+_game: Optional[ONUWGame] = None
 
 # Thread-safe queue for SSE events - shared between game thread and Flask
 _event_queue: queue.Queue = queue.Queue(maxsize=1000)
@@ -30,7 +30,7 @@ _sse_queues: list[queue.Queue] = []
 _sse_lock = threading.Lock()
 
 
-def set_game(game: MafiaGame) -> None:
+def set_game(game: ONUWGame) -> None:
     """Set the global game instance."""
     global _game
     _game = game
@@ -114,9 +114,10 @@ def get_players():
         return jsonify({"players": []})
     return jsonify({
         "players": [
-            {"name": p.name, "is_alive": p.is_alive}
+            {"name": p.name, "original_role": p.original_role.value, "current_role": p.current_role.value}
             for p in _game.players
-        ]
+        ],
+        "center_cards": [r.value for r in _game.state.center_cards]
     })
 
 

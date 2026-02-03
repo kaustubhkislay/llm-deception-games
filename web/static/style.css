@@ -1,4 +1,4 @@
-/* LLM Mafia - A dark, mysterious aesthetic */
+/* One Night Ultimate Werewolf - A dark, mysterious aesthetic */
 
 @import url('https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
@@ -320,10 +320,23 @@ h2 {
     text-transform: uppercase;
 }
 
+/* ONUW Role Team Colors */
+.role-werewolf { color: var(--accent-red); background: rgba(194, 59, 59, 0.15); }
+.role-village { color: var(--accent-blue); background: rgba(59, 139, 194, 0.15); }
+.role-neutral { color: var(--accent-gold); background: rgba(194, 163, 59, 0.15); }
+
+/* Legacy Mafia roles (for compatibility) */
 .role-mafia { color: var(--accent-red); background: rgba(194, 59, 59, 0.15); }
 .role-doctor { color: var(--accent-green); background: rgba(59, 194, 70, 0.15); }
 .role-detective { color: var(--accent-blue); background: rgba(59, 139, 194, 0.15); }
 .role-town { color: var(--text-secondary); }
+
+/* Role changed indicator */
+.role-changed {
+    font-size: 0.55rem;
+    color: var(--accent-gold);
+    margin-left: 0.25rem;
+}
 
 /* Back Button */
 .back-button-container {
@@ -900,6 +913,191 @@ button:hover {
     background: var(--text-muted);
 }
 
+/* ============================================
+   ONUW-Specific Styles
+   ============================================ */
+
+/* Center Cards Panel */
+.center-cards {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border-color);
+}
+
+.center-cards h3 {
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+    margin-bottom: 0.75rem;
+}
+
+.center-cards-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.center-card {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    font-size: 0.85rem;
+}
+
+.center-card-index {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    min-width: 20px;
+}
+
+.center-card-icon {
+    font-size: 1rem;
+}
+
+.center-card-role {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+}
+
+.center-card-placeholder {
+    color: var(--text-muted);
+    font-style: italic;
+    font-size: 0.85rem;
+}
+
+/* Swap Event */
+.swap-event {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    margin: 0.75rem 0;
+    background: rgba(194, 163, 59, 0.1);
+    border-left: 3px solid var(--accent-gold);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+}
+
+.swap-icon {
+    font-size: 1rem;
+}
+
+.swap-text {
+    color: var(--accent-gold);
+}
+
+/* Night Action Targets */
+.target-player {
+    font-weight: 600;
+}
+
+.target-center {
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    background: var(--bg-hover);
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+}
+
+/* Action Result */
+.action-result {
+    margin-top: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    background: rgba(59, 139, 194, 0.1);
+    border-radius: 4px;
+    font-size: 0.9rem;
+}
+
+/* ONUW Role-specific Night Sections */
+.werewolf-section .section-header,
+.role-werewolf-section .section-header { 
+    background: rgba(194, 59, 59, 0.15);
+    color: var(--accent-red);
+}
+
+.village-section .section-header,
+.role-village-section .section-header { 
+    background: rgba(59, 139, 194, 0.15);
+    color: var(--accent-blue);
+}
+
+.neutral-section .section-header,
+.role-neutral-section .section-header { 
+    background: rgba(194, 163, 59, 0.15);
+    color: var(--accent-gold);
+}
+
+/* Winner Banner Colors */
+.winner-village {
+    color: var(--accent-blue) !important;
+    text-shadow: 0 0 30px rgba(59, 139, 194, 0.3) !important;
+}
+
+.winner-werewolf {
+    color: var(--accent-red) !important;
+    text-shadow: 0 0 30px rgba(194, 59, 59, 0.3) !important;
+}
+
+.winner-tanner {
+    color: var(--accent-gold) !important;
+    text-shadow: 0 0 30px rgba(194, 163, 59, 0.3) !important;
+}
+
+/* Win Explanation */
+.win-explanation {
+    margin: 1rem 0 2rem;
+    padding: 1rem;
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    text-align: left;
+}
+
+.win-explanation p {
+    margin: 0.5rem 0;
+    color: var(--text-secondary);
+}
+
+/* Final Center Cards */
+.final-center-cards {
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border-color);
+}
+
+.final-center-cards h4 {
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+    margin-bottom: 0.75rem;
+}
+
+.final-center-card {
+    display: inline-block;
+    padding: 0.35rem 0.75rem;
+    margin: 0.25rem;
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    font-size: 0.85rem;
+}
+
+/* Killed Player Styling */
+.final-player.killed {
+    border-left: 3px solid var(--accent-red);
+}
+
+.final-player.killed .player-status {
+    color: var(--accent-red);
+}
+
 /* Responsive */
 @media (max-width: 900px) {
     .game-layout {
@@ -909,7 +1107,7 @@ button:hover {
     .players-panel {
         border-right: none;
         border-bottom: 1px solid var(--border-color);
-        max-height: 150px;
+        max-height: 200px;
     }
     
     .players-list {
@@ -920,5 +1118,9 @@ button:hover {
     
     .player-item {
         margin: 0;
+    }
+    
+    .center-cards {
+        display: none; /* Hide on mobile for now */
     }
 }

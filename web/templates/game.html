@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 
-{% block title %}LLM Mafia - Live Game{% endblock %}
+{% block title %}One Night Ultimate Werewolf - Live Game{% endblock %}
 
 {% block content %}
 <header class="game-header">
-    <h1>LLM Mafia</h1>
+    <h1>One Night Ultimate Werewolf</h1>
     <div id="phase-indicator" class="phase-badge phase-unknown">
         <span class="phase-name">Loading...</span>
         <span class="day-number"></span>
@@ -26,6 +26,12 @@
         <ul id="players-list" class="players-list">
             <!-- Populated by JS -->
         </ul>
+        <div id="center-cards" class="center-cards">
+            <h3>Center Cards</h3>
+            <div id="center-cards-list" class="center-cards-list">
+                <!-- Populated by JS -->
+            </div>
+        </div>
         <div class="back-button-container" id="back-button-container" style="display: none;">
             <button id="back-to-square-btn" class="back-to-square-btn" onclick="backToTownSquare()">
                 ← Back to Town Square
@@ -62,19 +68,20 @@
 // Game state
 let gameState = {
     phase: 'UNKNOWN',
-    dayNumber: 0,
+    dayNumber: 1,
     players: [],
+    centerCards: [],
     winner: null,
     playerThoughts: {}
 };
 
 // Timeline and phase tracking
 let timelineState = {
-    phases: [],           // Array of phase snapshots
-    currentIndex: -1,     // Currently viewing index
-    liveIndex: -1,        // Latest live phase index
-    isLive: true,         // Whether we're watching live
-    viewingPlayer: null   // Player name if viewing thoughts, null for town square
+    phases: [],
+    currentIndex: -1,
+    liveIndex: -1,
+    isLive: true,
+    viewingPlayer: null
 };
 
 // Player colors
@@ -96,14 +103,41 @@ const PHASE_ICONS = {
 };
 
 const ROLE_ICONS = {
-    'DETECTIVE': '🔍',
-    'DOCTOR': '💉',
-    'MAFIA': '🔪',
-    'TOWN': '🏠'
+    'WEREWOLF': '🐺',
+    'VILLAGER': '👤',
+    'SEER': '🔮',
+    'ROBBER': '🦹',
+    'TROUBLEMAKER': '🎭',
+    'DRUNK': '🍺',
+    'INSOMNIAC': '😴',
+    'HUNTER': '🏹',
+    'MINION': '👹',
+    'TANNER': '🧵'
+};
+
+const ROLE_TEAMS = {
+    'WEREWOLF': 'werewolf',
+    'MINION': 'werewolf',
+    'VILLAGER': 'village',
+    'SEER': 'village',
+    'ROBBER': 'village',
+    'TROUBLEMAKER': 'village',
+    'DRUNK': 'village',
+    'INSOMNIAC': 'village',
+    'HUNTER': 'village',
+    'TANNER': 'neutral'
 };
 
 function getPlayerColor(name) {
     return PLAYER_COLORS[name] || '#95a5a6';
+}
+
+function getRoleIcon(role) {
+    return ROLE_ICONS[role] || '❓';
+}
+
+function getRoleTeamClass(role) {
+    return `role-${ROLE_TEAMS[role] || 'village'}`;
 }
 
 // DOM elements
@@ -111,6 +145,7 @@ const phaseIndicator = document.getElementById('phase-indicator');
 const phaseName = phaseIndicator.querySelector('.phase-name');
 const dayNumberEl = phaseIndicator.querySelector('.day-number');
 const playersList = document.getElementById('players-list');
+const centerCardsList = document.getElementById('center-cards-list');
 const timeline = document.getElementById('timeline');
 const mainPanel = document.getElementById('main-panel');
 const panelTitle = document.getElementById('panel-title');
@@ -132,23 +167,49 @@ function escapeHtml(text) {
 function updatePhaseIndicator(phase, day) {
     phaseIndicator.className = `phase-badge phase-${phase.toLowerCase()}`;
     phaseName.textContent = phase;
-    if (day) {
-        dayNumberEl.textContent = `Day ${day}`;
-    }
+    dayNumberEl.textContent = ''; // ONUW is always "Day 1"
 }
 
-// Update players list
+// Update players list - show current role
 function updatePlayers(players) {
-    playersList.innerHTML = players.map(p => `
-        <li class="player-item ${p.is_alive ? 'alive' : 'dead'}">
-            <a href="javascript:void(0)" onclick="viewPlayerThoughts('${p.name}')" 
-               class="player-link" style="border-left: 4px solid ${getPlayerColor(p.name)}">
-                <span class="player-name" style="color: ${getPlayerColor(p.name)}">${p.name}</span>
-                <span class="player-role role-${p.role.toLowerCase()}">${p.role}</span>
-                <span class="player-status">${p.is_alive ? '🟢' : '💀'}</span>
-            </a>
-        </li>
-    `).join('');
+    playersList.innerHTML = players.map(p => {
+        const roleChanged = p.original_role !== p.current_role;
+        const icon = getRoleIcon(p.current_role);
+        const teamClass = getRoleTeamClass(p.current_role);
+        
+        return `
+            <li class="player-item">
+                <a href="javascript:void(0)" onclick="viewPlayerThoughts('${p.name}')" 
+                   class="player-link" style="border-left: 4px solid ${getPlayerColor(p.name)}">
+                    <span class="player-name" style="color: ${getPlayerColor(p.name)}">${p.name}</span>
+                    <span class="player-role ${teamClass}">
+                        ${icon} ${p.current_role}
+                        ${roleChanged ? `<span class="role-changed">(was ${p.original_role})</span>` : ''}
+                    </span>
+                </a>
+            </li>
+        `;
+    }).join('');
+}
+
+// Update center cards display
+function updateCenterCards(cards) {
+    if (!cards || cards.length === 0) {
+        centerCardsList.innerHTML = '<div class="center-card-placeholder">Loading...</div>';
+        return;
+    }
+    
+    centerCardsList.innerHTML = cards.map((role, idx) => {
+        const icon = getRoleIcon(role);
+        const teamClass = getRoleTeamClass(role);
+        return `
+            <div class="center-card ${teamClass}">
+                <span class="center-card-index">#${idx}</span>
+                <span class="center-card-icon">${icon}</span>
+                <span class="center-card-role">${role}</span>
+            </div>
+        `;
+    }).join('');
 }
 
 // Render timeline
@@ -159,17 +220,9 @@ function renderTimeline() {
     }
     
     let html = '';
-    let lastDay = 0;
     
     timelineState.phases.forEach((phase, idx) => {
-        // Add day marker when day changes
-        if (phase.dayNumber !== lastDay) {
-            if (idx > 0) html += '<div class="timeline-connector"></div>';
-            html += `<div class="timeline-day-marker">Day ${phase.dayNumber}</div>`;
-            lastDay = phase.dayNumber;
-        } else if (idx > 0) {
-            html += '<div class="timeline-connector"></div>';
-        }
+        if (idx > 0) html += '<div class="timeline-connector"></div>';
         
         const isActive = idx === timelineState.currentIndex;
         const isLive = idx === timelineState.liveIndex && timelineState.isLive;
@@ -177,7 +230,7 @@ function renderTimeline() {
         html += `
             <div class="timeline-phase phase-${phase.phase.toLowerCase()} ${isActive ? 'active' : ''}" 
                  onclick="navigateToPhase(${idx})"
-                 title="${phase.phase} - Day ${phase.dayNumber}">
+                 title="${phase.phase}">
                 <span class="timeline-phase-icon">${PHASE_ICONS[phase.phase] || '❓'}</span>
                 <span class="timeline-phase-label">${phase.phase}</span>
             </div>
@@ -207,13 +260,18 @@ function navigateToPhase(index) {
     
     const snapshot = timelineState.phases[index];
     
-    // Update phase indicator
-    updatePhaseIndicator(snapshot.phase, snapshot.dayNumber);
+    updatePhaseIndicator(snapshot.phase, 1);
     
-    // Update players
-    updatePlayers(snapshot.players);
+    // Update players with snapshot data
+    if (snapshot.players) {
+        updatePlayers(snapshot.players);
+    }
     
-    // Render main panel based on phase type and whether viewing player
+    // Update center cards
+    if (snapshot.centerCards) {
+        updateCenterCards(snapshot.centerCards);
+    }
+    
     if (timelineState.viewingPlayer) {
         renderPlayerThoughts(timelineState.viewingPlayer, snapshot);
     } else {
@@ -225,7 +283,7 @@ function navigateToPhase(index) {
 
 // Render main panel content based on phase
 function renderPhaseContent(snapshot) {
-    panelTitle.textContent = `${snapshot.phase} - Day ${snapshot.dayNumber}`;
+    panelTitle.textContent = snapshot.phase;
     backButtonContainer.style.display = 'none';
     
     let html = '';
@@ -245,7 +303,7 @@ function renderPhaseContent(snapshot) {
     panelContent.innerHTML = html;
 }
 
-// Render night phase - render events in chronological order as they occurred
+// Render night phase - ONUW style with role actions
 function renderNightPhase(snapshot) {
     let html = '';
     const events = snapshot.events || [];
@@ -255,108 +313,69 @@ function renderNightPhase(snapshot) {
         return html;
     }
     
-    // Track if we're in a mafia section
-    let inMafiaSection = false;
-    
     for (const event of events) {
         if (event.type === 'gm_message') {
-            // Close mafia section if open
-            if (inMafiaSection) {
-                html += '</div></div>';
-                inMafiaSection = false;
-            }
             html += renderGmMessage(event.content || event.data?.content);
-            
-        } else if (event.type === 'night_reasoning') {
-            // Close mafia section if open
-            if (inMafiaSection) {
-                html += '</div></div>';
-                inMafiaSection = false;
-            }
-            html += renderNightActionBlock(event.role, event);
-            
-        } else if (event.type === 'mafia_chat') {
-            // Open mafia section if not open
-            if (!inMafiaSection) {
-                html += '<div class="night-section mafia-section">';
-                html += '<div class="section-header"><span class="role-icon">🔪</span> MAFIA DISCUSSION</div>';
-                html += '<div class="section-content">';
-                inMafiaSection = true;
-            }
-            html += `
-                <div class="mafia-message">
-                    <span class="msg-sender" style="color: ${getPlayerColor(event.sender)}">[${event.sender}]</span>
-                    <span class="msg-content">${escapeHtml(event.content)}</span>
-                </div>
-            `;
-            
-        } else if (event.type === 'kill_intention') {
-            // Open mafia section if not open
-            if (!inMafiaSection) {
-                html += '<div class="night-section mafia-section">';
-                html += '<div class="section-header"><span class="role-icon">🔪</span> MAFIA DISCUSSION</div>';
-                html += '<div class="section-content">';
-                inMafiaSection = true;
-            }
-            html += `
-                <div class="kill-intention">
-                    <span class="player-name" style="color: ${getPlayerColor(event.player)}">${event.player}</span>
-                    <span class="intention-arrow">→ Kill:</span>
-                    <span class="target-name" style="color: ${getPlayerColor(event.target)}">${event.target}</span>
-                </div>
-            `;
+        } else if (event.type === 'night_action') {
+            html += renderNightActionBlock(event);
+        } else if (event.type === 'card_swap') {
+            html += renderCardSwap(event);
         }
-    }
-    
-    // Close mafia section if still open
-    if (inMafiaSection) {
-        html += '</div></div>';
     }
     
     return html;
 }
 
-// Render night action block (Detective/Doctor)
-function renderNightActionBlock(role, data) {
-    const icon = ROLE_ICONS[role] || '❓';
-    const roleClass = role.toLowerCase();
+// Render a night action block
+function renderNightActionBlock(event) {
+    const icon = getRoleIcon(event.role);
+    const teamClass = getRoleTeamClass(event.role);
     
-    let html = `
-        <div class="night-section ${roleClass}-section">
+    let targetHtml = '';
+    if (event.targets && event.targets.length > 0) {
+        targetHtml = event.targets.map(t => {
+            // Check if it's a center card reference
+            if (t.startsWith('center_')) {
+                return `<span class="target-center">Center ${t.split('_')[1]}</span>`;
+            }
+            return `<span class="target-player" style="color: ${getPlayerColor(t)}">${t}</span>`;
+        }).join(', ');
+    }
+    
+    let resultHtml = '';
+    if (event.result) {
+        if (Array.isArray(event.result)) {
+            resultHtml = `<div class="action-result">Saw: ${event.result.join(', ')}</div>`;
+        } else {
+            resultHtml = `<div class="action-result">Result: ${escapeHtml(event.result)}</div>`;
+        }
+    }
+    
+    return `
+        <div class="night-section ${teamClass}-section">
             <div class="section-header">
                 <span class="role-icon">${icon}</span> 
-                ${role} - ${data.player}
+                ${event.role} - <span style="color: ${getPlayerColor(event.player)}">${event.player}</span>
             </div>
             <div class="section-content">
-    `;
-    
-    if (data.reasoning) {
-        html += `
-            <div class="reasoning-block">
-                <div class="reasoning-label">Reasoning:</div>
-                <div class="reasoning-text">"${escapeHtml(data.reasoning)}"</div>
+                <div class="action-block">
+                    <span class="action-label">[${event.action}]</span>
+                    ${targetHtml ? `<span class="action-target">→ ${targetHtml}</span>` : ''}
+                </div>
+                ${resultHtml}
             </div>
-        `;
-    }
-    
-    html += `
-        <div class="action-block">
-            <span class="action-label">[night_action]</span>
-            <span class="action-target">target: "${data.target}"</span>
         </div>
     `;
-    
-    if (data.result) {
-        html += `
-            <div class="result-block">
-                <span class="result-label">Result:</span>
-                <span class="result-text">${escapeHtml(data.result)}</span>
-            </div>
-        `;
-    }
-    
-    html += '</div></div>';
-    return html;
+}
+
+// Render card swap event
+function renderCardSwap(event) {
+    return `
+        <div class="swap-event">
+            <span class="swap-icon">🔄</span>
+            <span class="swap-text">Swapped: ${event.location1} ↔ ${event.location2}</span>
+        </div>
+    `;
 }
 
 // Render GM message
@@ -375,7 +394,7 @@ function renderDayPhase(snapshot) {
     const messages = snapshot.messages || [];
     
     if (messages.length === 0) {
-        html = '<div class="panel-placeholder">No discussion yet...</div>';
+        html = '<div class="panel-placeholder">Discussion in progress...</div>';
     } else {
         for (const msg of messages) {
             const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString() : '';
@@ -399,7 +418,7 @@ function renderVotingPhase(snapshot) {
     const votes = events.filter(e => e.type === 'vote');
     const voteResult = events.find(e => e.type === 'vote_result');
     
-    html += renderGmMessage("The town gathers to vote. Each player will cast their vote.");
+    html += renderGmMessage("Time to vote! Point at who you think is a Werewolf.");
     
     html += '<div class="votes-container">';
     
@@ -445,14 +464,11 @@ function renderVotingPhase(snapshot) {
     
     // Result
     if (voteResult) {
-        if (voteResult.lynched) {
-            const deathEvent = events.find(e => e.type === 'death' && e.cause === 'lynched');
-            const alignment = deathEvent?.was_mafia ? "MAFIA" : "not Mafia";
-            html += renderGmMessage(`The votes are tallied. ${voteResult.lynched} was lynched. They were ${alignment}.`);
-        } else if (voteResult.was_tie) {
-            html += renderGmMessage("The votes are tallied. The vote was tied. Nobody was lynched.");
+        if (voteResult.killed && voteResult.killed.length > 0) {
+            const killedNames = voteResult.killed.join(', ');
+            html += renderGmMessage(`The village points... ${killedNames} ${voteResult.killed.length === 1 ? 'is' : 'are'} killed!`);
         } else {
-            html += renderGmMessage("The votes are tallied. No valid votes were cast. Nobody was lynched.");
+            html += renderGmMessage("The village points... but no one has enough votes. No one dies!");
         }
     }
     
@@ -464,18 +480,61 @@ function renderGameOver(snapshot) {
     let html = '<div class="game-over-content">';
     
     const winner = gameState.winner || 'UNKNOWN';
-    html += `<div class="winner-banner">${winner} WINS!</div>`;
+    html += `<div class="winner-banner winner-${winner.toLowerCase()}">${winner} WINS!</div>`;
+    
+    // Explain win condition
+    html += '<div class="win-explanation">';
+    const werewolves = (snapshot.players || []).filter(p => p.current_role === 'WEREWOLF');
+    const killed = gameState.killed || [];
+    
+    if (werewolves.length > 0) {
+        const werewolfNames = werewolves.map(p => p.name).join(', ');
+        html += `<p>Werewolf players: ${werewolfNames}</p>`;
+        
+        const killedWerewolves = werewolves.filter(p => killed.includes(p.name));
+        if (killedWerewolves.length > 0) {
+            html += `<p>A werewolf was killed → Village wins!</p>`;
+        } else {
+            html += `<p>No werewolf was killed → Werewolf team wins!</p>`;
+        }
+    } else {
+        html += `<p>No werewolves among players (all in center)!</p>`;
+        if (killed.length > 0) {
+            html += `<p>Someone was killed → Werewolf team wins!</p>`;
+        } else {
+            html += `<p>No one was killed → Village wins!</p>`;
+        }
+    }
+    html += '</div>';
     
     html += '<div class="final-roles-list">';
-    for (const p of snapshot.players) {
+    for (const p of (snapshot.players || [])) {
+        const icon = getRoleIcon(p.current_role);
+        const teamClass = getRoleTeamClass(p.current_role);
+        const isKilled = killed.includes(p.name);
+        const roleChanged = p.original_role !== p.current_role;
+        
         html += `
-            <div class="final-player ${p.is_alive ? 'alive' : 'dead'}">
+            <div class="final-player ${isKilled ? 'killed' : 'alive'}">
                 <span class="player-name" style="color: ${getPlayerColor(p.name)}">${p.name}</span>
-                <span class="player-role role-${p.role.toLowerCase()}">${p.role}</span>
-                <span class="player-status">${p.is_alive ? 'Survived' : 'Dead'}</span>
+                <span class="player-role ${teamClass}">
+                    ${icon} ${p.current_role}
+                    ${roleChanged ? `<span class="role-changed">(was ${p.original_role})</span>` : ''}
+                </span>
+                <span class="player-status">${isKilled ? '💀 KILLED' : '✓ Survived'}</span>
             </div>
         `;
     }
+    html += '</div>';
+    
+    // Center cards at end
+    html += '<div class="final-center-cards">';
+    html += '<h4>Center Cards</h4>';
+    const centerCards = snapshot.centerCards || gameState.centerCards || [];
+    html += centerCards.map((role, idx) => {
+        const icon = getRoleIcon(role);
+        return `<span class="final-center-card">#${idx}: ${icon} ${role}</span>`;
+    }).join(' ');
     html += '</div>';
     
     html += '</div>';
@@ -504,30 +563,25 @@ function backToTownSquare() {
     }
 }
 
-// Render player thoughts from gameState.playerThoughts
+// Render player thoughts
 function renderPlayerThoughts(playerName, snapshot) {
-    panelTitle.textContent = `${playerName}'s Thoughts - ${snapshot.phase} Day ${snapshot.dayNumber}`;
+    panelTitle.textContent = `${playerName}'s Thoughts - ${snapshot.phase}`;
     
-    const phaseKey = `${snapshot.dayNumber}_${snapshot.phase}`;
+    const phaseKey = `1_${snapshot.phase}`;
     const playerThoughts = gameState.playerThoughts || {};
     const thoughts = (playerThoughts[playerName] && playerThoughts[playerName][phaseKey]) || [];
     
-    console.log('renderPlayerThoughts:', playerName, phaseKey, 'found', thoughts.length, 'thoughts');
-    
     if (thoughts.length === 0) {
-        // Find phases where this player HAS thoughts
         const playerPhases = playerThoughts[playerName] || {};
         const phasesWithThoughts = Object.entries(playerPhases)
             .filter(([k, v]) => v && v.length > 0)
-            .map(([k, v]) => `${k} (${v.length})`);
+            .map(([k, v]) => `${k.split('_')[1]} (${v.length})`);
         
+        // Find player's original role
+        const player = gameState.players.find(p => p.name === playerName);
         let explanation = '';
-        if (snapshot.phase === 'NIGHT') {
-            // Find this player's role
-            const player = gameState.players.find(p => p.name === playerName);
-            if (player && player.role === 'TOWN') {
-                explanation = '<br><em>Town members have no night action and thus no thoughts during night.</em>';
-            }
+        if (player && ['VILLAGER', 'HUNTER', 'TANNER'].includes(player.original_role)) {
+            explanation = `<br><em>${player.original_role}s have no night action.</em>`;
         }
         
         panelContent.innerHTML = `
@@ -547,7 +601,6 @@ function renderPlayerThoughts(playerName, snapshot) {
         return;
     }
     
-    // Render actual thoughts
     let thoughtsHtml = '';
     for (const thought of thoughts) {
         let label = '';
@@ -584,7 +637,7 @@ function renderPlayerThoughts(playerName, snapshot) {
     panelContent.innerHTML = `
         <div class="player-thoughts-container">
             <div class="thoughts-header">
-                <span style="color: ${getPlayerColor(playerName)}">${playerName}</span>'s internal state during ${snapshot.phase} Day ${snapshot.dayNumber}
+                <span style="color: ${getPlayerColor(playerName)}">${playerName}</span>'s internal state during ${snapshot.phase}
             </div>
             <div class="thoughts-content">
                 ${thoughtsHtml}
@@ -596,13 +649,26 @@ function renderPlayerThoughts(playerName, snapshot) {
 // Show game over modal
 function showGameOver(winner, players) {
     winnerText.textContent = `${winner} Wins!`;
-    finalRoles.innerHTML = players.map(p => `
-        <div class="final-player ${p.is_alive ? 'alive' : 'dead'}">
-            <span class="player-name">${p.name}</span>
-            <span class="player-role role-${p.role.toLowerCase()}">${p.role}</span>
-            <span class="player-status">${p.is_alive ? 'Survived' : 'Dead'}</span>
-        </div>
-    `).join('');
+    winnerText.className = `winner-${winner.toLowerCase()}`;
+    
+    finalRoles.innerHTML = players.map(p => {
+        const icon = getRoleIcon(p.current_role || p.role);
+        const teamClass = getRoleTeamClass(p.current_role || p.role);
+        const roleChanged = p.original_role && p.original_role !== p.current_role;
+        const isKilled = gameState.killed && gameState.killed.includes(p.name);
+        
+        return `
+            <div class="final-player ${isKilled ? 'killed' : 'alive'}">
+                <span class="player-name" style="color: ${getPlayerColor(p.name)}">${p.name}</span>
+                <span class="player-role ${teamClass}">
+                    ${icon} ${p.current_role || p.role}
+                    ${roleChanged ? `<span class="role-changed">(was ${p.original_role})</span>` : ''}
+                </span>
+                <span class="player-status">${isKilled ? '💀' : '✓'}</span>
+            </div>
+        `;
+    }).join('');
+    
     gameOverModal.classList.remove('hidden');
 }
 
@@ -612,12 +678,11 @@ function dismissModal(event) {
     gameOverModal.classList.add('hidden');
 }
 
-// Add a new phase to timeline (for live updates)
+// Add a new phase to timeline
 function addPhaseToTimeline(phaseData) {
     timelineState.phases.push(phaseData);
     timelineState.liveIndex = timelineState.phases.length - 1;
     
-    // Auto-advance if watching live
     if (timelineState.isLive || timelineState.currentIndex === -1) {
         timelineState.currentIndex = timelineState.liveIndex;
         timelineState.isLive = true;
@@ -627,14 +692,14 @@ function addPhaseToTimeline(phaseData) {
     renderTimeline();
 }
 
-// Update current phase with new event (for live updates)
+// Update current phase with new event
 function updateCurrentPhase(event) {
     if (timelineState.phases.length === 0) {
-        // No phases yet - create one
         const newPhase = {
             phase: gameState.phase || 'NIGHT',
-            dayNumber: gameState.dayNumber || 1,
+            dayNumber: 1,
             players: JSON.parse(JSON.stringify(gameState.players)),
+            centerCards: gameState.centerCards || [],
             events: [],
             messages: [],
             votes: {},
@@ -651,9 +716,6 @@ function updateCurrentPhase(event) {
     if (!currentPhase.events) currentPhase.events = [];
     currentPhase.events.push(event);
     
-    console.log('Added event to phase:', event.type, 'Total events:', currentPhase.events.length);
-    
-    // Re-render if viewing the current live phase (regardless of isLive flag)
     if (timelineState.currentIndex === timelineState.liveIndex && !timelineState.viewingPlayer) {
         renderPhaseContent(currentPhase);
     }
@@ -679,29 +741,30 @@ function handleEvent(event) {
     
     switch (data.event_type) {
         case 'INITIAL_STATE':
-            // Load initial state
             gameState.players = data.data.players;
             gameState.phase = data.data.phase;
-            gameState.dayNumber = data.data.day_number || 1;
+            gameState.dayNumber = 1;
             gameState.winner = data.data.winner;
             gameState.playerThoughts = data.data.player_thoughts || {};
+            gameState.centerCards = data.data.center_cards || [];
+            gameState.killed = data.data.killed || [];
             
-            // Load timeline from phase_history if available
+            updateCenterCards(gameState.centerCards);
+            
             if (data.data.phase_history && data.data.phase_history.length > 0) {
                 timelineState.phases = data.data.phase_history;
                 timelineState.liveIndex = timelineState.phases.length - 1;
                 timelineState.currentIndex = timelineState.liveIndex;
-                // Live if no winner yet (game still in progress)
                 timelineState.isLive = !data.data.winner;
                 
                 renderTimeline();
                 navigateToPhase(timelineState.currentIndex);
             } else {
-                // No phase history - create initial phase for live game
                 const initialPhase = {
                     phase: gameState.phase || 'NIGHT',
-                    dayNumber: gameState.dayNumber,
+                    dayNumber: 1,
                     players: data.data.players || [],
+                    centerCards: data.data.center_cards || [],
                     events: [],
                     messages: [],
                     votes: {},
@@ -713,7 +776,7 @@ function handleEvent(event) {
                 timelineState.isLive = true;
                 
                 updatePlayers(data.data.players || []);
-                updatePhaseIndicator(gameState.phase, gameState.dayNumber);
+                updatePhaseIndicator(gameState.phase, 1);
                 renderTimeline();
                 renderPhaseContent(initialPhase);
             }
@@ -725,23 +788,20 @@ function handleEvent(event) {
             
         case 'GAME_START':
             gameState.players = data.data.players;
-            gameState.dayNumber = 1;
+            gameState.centerCards = data.data.center_cards || [];
             updatePlayers(data.data.players);
-            
-            // If no phases yet, we'll create one when we get PHASE_CHANGE
-            // Mark as live since game just started
+            updateCenterCards(gameState.centerCards);
             timelineState.isLive = true;
             break;
             
         case 'PHASE_CHANGE':
             gameState.phase = data.data.phase;
-            gameState.dayNumber = data.data.day_number;
             
-            // Create new phase snapshot
             const newPhase = {
                 phase: data.data.phase,
-                dayNumber: data.data.day_number,
+                dayNumber: 1,
                 players: JSON.parse(JSON.stringify(gameState.players)),
+                centerCards: JSON.parse(JSON.stringify(gameState.centerCards)),
                 events: [],
                 messages: [],
                 votes: {},
@@ -755,21 +815,39 @@ function handleEvent(event) {
             updateCurrentPhase({...data.data, type: 'gm_message'});
             break;
             
-        case 'NIGHT_REASONING':
-            updateCurrentPhase({...data.data, type: 'night_reasoning'});
+        case 'NIGHT_ACTION':
+            updateCurrentPhase({...data.data, type: 'night_action'});
             break;
             
-        case 'MAFIA_CHAT':
-            // Spread data first, then set type to ensure our type wins
-            updateCurrentPhase({...data.data, type: 'mafia_chat'});
-            break;
+        case 'CARD_SWAP':
+            // Update player and center card state
+            if (data.data.updated_players) {
+                for (const [name, pData] of Object.entries(data.data.updated_players)) {
+                    const player = gameState.players.find(p => p.name === name);
+                    if (player) {
+                        player.current_role = pData.current_role;
+                    }
+                }
+            }
+            if (data.data.center_cards) {
+                gameState.centerCards = data.data.center_cards;
+            }
             
-        case 'MAFIA_KILL_INTENTION':
-            updateCurrentPhase({...data.data, type: 'kill_intention'});
+            // Update displays
+            updatePlayers(gameState.players);
+            updateCenterCards(gameState.centerCards);
+            
+            // Update current phase snapshot
+            if (timelineState.phases.length > 0) {
+                const phase = timelineState.phases[timelineState.liveIndex];
+                phase.players = JSON.parse(JSON.stringify(gameState.players));
+                phase.centerCards = JSON.parse(JSON.stringify(gameState.centerCards));
+            }
+            
+            updateCurrentPhase({...data.data, type: 'card_swap'});
             break;
             
         case 'PUBLIC_MESSAGE':
-            // Add to current phase messages
             if (timelineState.phases.length > 0) {
                 const phase = timelineState.phases[timelineState.liveIndex];
                 if (!phase.messages) phase.messages = [];
@@ -778,39 +856,19 @@ function handleEvent(event) {
             }
             break;
             
-        case 'VOTE_REASONING':
+        case 'VOTE_CAST':
             updateCurrentPhase({...data.data, type: 'vote'});
             break;
             
         case 'VOTE_RESULT':
+            gameState.killed = data.data.killed || [];
             updateCurrentPhase({...data.data, type: 'vote_result'});
-            break;
-            
-        case 'NIGHT_RESULT':
-            updateCurrentPhase({...data.data, type: 'night_result'});
-            break;
-            
-        case 'PLAYER_DEATH':
-            // Update player status
-            const deadPlayer = gameState.players.find(p => p.name === data.data.player);
-            if (deadPlayer) deadPlayer.is_alive = false;
-            
-            // Update in current phase
-            if (timelineState.phases.length > 0) {
-                const phase = timelineState.phases[timelineState.liveIndex];
-                phase.players = JSON.parse(JSON.stringify(gameState.players));
-            }
-            
-            updateCurrentPhase({...data.data, type: 'death'});
-            updatePlayers(gameState.players);
             break;
         
         case 'PLAYER_THOUGHT':
-            // Update player thoughts in gameState
             const thoughtPlayerName = data.data.player_name;
             const thoughtPhase = data.data.phase || gameState.phase;
-            const thoughtDay = data.data.day_number || gameState.dayNumber;
-            const thoughtPhaseKey = `${thoughtDay}_${thoughtPhase}`;
+            const thoughtPhaseKey = `1_${thoughtPhase}`;
             
             if (!gameState.playerThoughts[thoughtPlayerName]) {
                 gameState.playerThoughts[thoughtPlayerName] = {};
@@ -819,7 +877,6 @@ function handleEvent(event) {
                 gameState.playerThoughts[thoughtPlayerName][thoughtPhaseKey] = [];
             }
             
-            // Add prompt and response
             gameState.playerThoughts[thoughtPlayerName][thoughtPhaseKey].push({
                 role: 'user',
                 content: data.data.prompt
@@ -830,9 +887,6 @@ function handleEvent(event) {
                 tool_calls: data.data.tool_calls
             });
             
-            console.log('Added thought for', thoughtPlayerName, thoughtPhaseKey);
-            
-            // If viewing this player, refresh the view
             if (timelineState.viewingPlayer === thoughtPlayerName) {
                 const snapshot = timelineState.phases[timelineState.currentIndex];
                 if (snapshot) {
@@ -844,12 +898,14 @@ function handleEvent(event) {
         case 'GAME_END':
             gameState.winner = data.data.winner;
             gameState.players = data.data.players;
+            gameState.centerCards = data.data.center_cards || [];
+            gameState.killed = data.data.killed || [];
             
-            // Add final phase
             const gameOverPhase = {
                 phase: 'GAME_OVER',
-                dayNumber: gameState.dayNumber,
+                dayNumber: 1,
                 players: data.data.players,
+                centerCards: data.data.center_cards || [],
                 events: [],
                 messages: [],
                 votes: {},
@@ -878,8 +934,9 @@ fetch('/api/state')
         } else {
             gameState.players = data.players;
             gameState.phase = data.phase;
-            gameState.dayNumber = data.day_number;
+            gameState.centerCards = data.center_cards || [];
             updatePlayers(data.players);
+            updateCenterCards(gameState.centerCards);
         }
     })
     .catch(e => console.error('Initial load error:', e));

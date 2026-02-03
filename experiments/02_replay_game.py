@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Replay a completed game from its JSON log file.
+Replay a completed ONUW game from its JSON log file.
 
 Usage:
     python experiments/02_replay_game.py <log_file.jsonl> [--port PORT] [--dev]
@@ -154,17 +154,18 @@ def main():
     _game_state = load_game_from_log(str(log_path))
     
     print(f"\n{'='*60}")
-    print(f"GAME REPLAY")
+    print(f"GAME REPLAY - ONE NIGHT ULTIMATE WEREWOLF")
     print(f"{'='*60}")
     print(f"Phase: {_game_state.get('phase', 'UNKNOWN')}")
-    print(f"Day: {_game_state.get('day_number', '?')}")
     print(f"Winner: {_game_state.get('winner', 'N/A')}")
     print(f"\nPlayers:")
     for p in _game_state.get('players', []):
-        status = '🟢' if p['is_alive'] else '💀'
-        print(f"  {status} {p['name']}: {p['role']}")
-    print(f"\nMessages: {len(_game_state.get('messages', []))}")
-    print(f"Night actions: {len(_game_state.get('night_actions', []))}")
+        original = p.get('original_role', p.get('role', '?'))
+        current = p.get('current_role', p.get('role', '?'))
+        changed = ' (CHANGED)' if original != current else ''
+        print(f"  {p['name']}: {current}{changed}")
+    print(f"\nCenter cards: {_game_state.get('center_cards', [])}")
+    print(f"Messages: {len(_game_state.get('messages', []))}")
     print(f"{'='*60}")
     
     print(f"\n🌐 Web viewer available at: http://localhost:{args.port}")

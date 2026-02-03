@@ -1,4 +1,4 @@
-"""Event broadcasting system for the Mafia game."""
+"""Event broadcasting system for ONUW game."""
 
 import asyncio
 import json
@@ -7,7 +7,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .mafia import GameEvent, EventType
+from .onuw import GameEvent, EventType
 
 
 # Thread-safe queue for pushing events to web viewer

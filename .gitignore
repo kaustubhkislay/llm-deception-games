@@ -3,3 +3,5 @@ __pycache__/
 .venv/
 llm_cache/
 game_logs/
+logs/
+results/

@@ -1,548 +1,439 @@
 #!/usr/bin/env python3
 """
-QA Test Suite for Mafia Game Logic
+QA Tests for One Night Ultimate Werewolf game logic.
 
-Tests edge cases and rule enforcement without running actual LLM calls.
 Run with: python experiments/03_qa_tests.py
 """
 
 import sys
 from pathlib import Path
-from collections import Counter
-from typing import Optional
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from infra.mafia import (
-    Role, Phase, Player, GameState, NightResult, VoteResult
+from infra.onuw import (
+    Role, Player, GameState, determine_winner, select_roles_for_game,
+    get_team, VILLAGE_TEAM, WEREWOLF_TEAM, NEUTRAL_TEAM
 )
 
 
-class TestResults:
-    """Track test results."""
-    def __init__(self):
-        self.passed = 0
-        self.failed = 0
-        self.errors: list[str] = []
+def test_role_selection():
+    """Test that role selection works correctly."""
+    print("\n=== Test: Role Selection ===")
     
-    def record(self, name: str, passed: bool, error_msg: str = ""):
-        if passed:
-            self.passed += 1
-            print(f"  ✅ {name}")
-        else:
-            self.failed += 1
-            self.errors.append(f"{name}: {error_msg}")
-            print(f"  ❌ {name}: {error_msg}")
-    
-    def summary(self):
-        total = self.passed + self.failed
-        print(f"\n{'='*60}")
-        print(f"TEST RESULTS: {self.passed}/{total} passed")
-        if self.errors:
-            print(f"\nFailed tests:")
-            for err in self.errors:
-                print(f"  - {err}")
-        print(f"{'='*60}")
-        return self.failed == 0
-
-
-results = TestResults()
-
-
-# =============================================================================
-# WIN CONDITION TESTS
-# =============================================================================
-
-def test_win_conditions():
-    """Test win condition detection."""
-    print("\n🎯 WIN CONDITION TESTS")
-    
-    # Test 1: Town wins when all mafia dead
-    players = [
-        Player(name="A", model="test", role=Role.TOWN, is_alive=True),
-        Player(name="B", model="test", role=Role.TOWN, is_alive=True),
-        Player(name="C", model="test", role=Role.MAFIA, is_alive=False),
+    # Test 5 players -> should get 5 player roles + 3 center
+    pool = [
+        Role.WEREWOLF, Role.WEREWOLF,
+        Role.SEER, Role.ROBBER, Role.TROUBLEMAKER,
+        Role.VILLAGER, Role.VILLAGER, Role.DRUNK
     ]
-    state = GameState(players=players)
-    living_mafia = len(state.living_mafia)
-    living_town = len(state.living_town)
-    winner = None
-    if living_mafia == 0:
-        winner = "TOWN"
-    elif living_mafia >= living_town:
-        winner = "MAFIA"
     
-    results.record(
-        "Town wins when all mafia dead",
-        winner == "TOWN",
-        f"Expected TOWN, got {winner}"
-    )
+    player_roles, center_roles = select_roles_for_game(5, pool)
     
-    # Test 2: Mafia wins when mafia >= town
+    assert len(player_roles) == 5, f"Expected 5 player roles, got {len(player_roles)}"
+    assert len(center_roles) == 3, f"Expected 3 center roles, got {len(center_roles)}"
+    assert len(player_roles) + len(center_roles) == 8, "Total should be 8 roles"
+    
+    # All roles should be from the pool
+    all_roles = player_roles + center_roles
+    for role in all_roles:
+        assert role in pool, f"Role {role} not in pool"
+    
+    print("  ✓ Role selection creates correct number of player and center roles")
+    print("  ✓ All selected roles are from the pool")
+
+
+def test_team_assignments():
+    """Test team assignment for each role."""
+    print("\n=== Test: Team Assignments ===")
+    
+    assert get_team(Role.WEREWOLF) == "WEREWOLF"
+    assert get_team(Role.MINION) == "WEREWOLF"
+    assert get_team(Role.VILLAGER) == "VILLAGE"
+    assert get_team(Role.SEER) == "VILLAGE"
+    assert get_team(Role.ROBBER) == "VILLAGE"
+    assert get_team(Role.TROUBLEMAKER) == "VILLAGE"
+    assert get_team(Role.DRUNK) == "VILLAGE"
+    assert get_team(Role.INSOMNIAC) == "VILLAGE"
+    assert get_team(Role.HUNTER) == "VILLAGE"
+    assert get_team(Role.TANNER) == "NEUTRAL"
+    
+    print("  ✓ Werewolf team roles correctly assigned")
+    print("  ✓ Village team roles correctly assigned")
+    print("  ✓ Neutral roles correctly assigned")
+
+
+def test_card_swapping():
+    """Test card swapping mechanics."""
+    print("\n=== Test: Card Swapping ===")
+    
+    # Create a game state
     players = [
-        Player(name="A", model="test", role=Role.TOWN, is_alive=True),
-        Player(name="B", model="test", role=Role.MAFIA, is_alive=True),
-        Player(name="C", model="test", role=Role.MAFIA, is_alive=True),
+        Player(name="Alice", model="test", original_role=Role.SEER, current_role=Role.SEER),
+        Player(name="Bob", model="test", original_role=Role.ROBBER, current_role=Role.ROBBER),
+        Player(name="Charlie", model="test", original_role=Role.WEREWOLF, current_role=Role.WEREWOLF),
     ]
-    state = GameState(players=players)
-    living_mafia = len(state.living_mafia)
-    living_town = len(state.living_town)
-    winner = None
-    if living_mafia == 0:
-        winner = "TOWN"
-    elif living_mafia >= living_town:
-        winner = "MAFIA"
+    center = [Role.VILLAGER, Role.DRUNK, Role.TROUBLEMAKER]
     
-    results.record(
-        "Mafia wins when mafia > town",
-        winner == "MAFIA",
-        f"Expected MAFIA, got {winner}"
+    state = GameState(
+        players=players,
+        center_cards=center,
+        original_assignments={p.name: p.original_role for p in players}
     )
     
-    # Test 3: Mafia wins when mafia == town
+    # Test player-to-player swap (Robber robs Alice)
+    state.swap_player_cards("Bob", "Alice")
+    
+    assert state.get_player_by_name("Bob").current_role == Role.SEER, \
+        "Bob should now have Seer"
+    assert state.get_player_by_name("Alice").current_role == Role.ROBBER, \
+        "Alice should now have Robber"
+    
+    print("  ✓ Player-to-player swap works correctly")
+    
+    # Test player-to-center swap (Drunk swaps with center)
+    state.swap_player_with_center("Charlie", 0)
+    
+    assert state.get_player_by_name("Charlie").current_role == Role.VILLAGER, \
+        "Charlie should now have Villager"
+    assert state.center_cards[0] == Role.WEREWOLF, \
+        "Center position 0 should now have Werewolf"
+    
+    print("  ✓ Player-to-center swap works correctly")
+    
+    # Verify original roles unchanged
+    assert state.get_player_by_name("Bob").original_role == Role.ROBBER
+    assert state.get_player_by_name("Alice").original_role == Role.SEER
+    assert state.get_player_by_name("Charlie").original_role == Role.WEREWOLF
+    
+    print("  ✓ Original roles preserved after swaps")
+
+
+def test_win_condition_werewolf_killed():
+    """Test: Village wins when a werewolf is killed."""
+    print("\n=== Test: Village Wins (Werewolf Killed) ===")
+    
     players = [
-        Player(name="A", model="test", role=Role.TOWN, is_alive=True),
-        Player(name="B", model="test", role=Role.MAFIA, is_alive=True),
+        Player(name="Alice", model="test", original_role=Role.WEREWOLF, current_role=Role.WEREWOLF),
+        Player(name="Bob", model="test", original_role=Role.SEER, current_role=Role.SEER),
+        Player(name="Charlie", model="test", original_role=Role.VILLAGER, current_role=Role.VILLAGER),
     ]
-    state = GameState(players=players)
-    living_mafia = len(state.living_mafia)
-    living_town = len(state.living_town)
-    winner = None
-    if living_mafia == 0:
-        winner = "TOWN"
-    elif living_mafia >= living_town:
-        winner = "MAFIA"
     
-    results.record(
-        "Mafia wins when mafia == town",
-        winner == "MAFIA",
-        f"Expected MAFIA, got {winner}"
+    state = GameState(
+        players=players,
+        center_cards=[Role.ROBBER, Role.DRUNK, Role.TROUBLEMAKER],
+        original_assignments={p.name: p.original_role for p in players}
     )
     
-    # Test 4: Game continues when town > mafia and mafia alive
+    # Everyone votes for Alice (the werewolf)
+    state.current_votes = {
+        "Alice": "Bob",      # Werewolf votes for Seer
+        "Bob": "Alice",      # Seer votes for Werewolf
+        "Charlie": "Alice"   # Villager votes for Werewolf
+    }
+    
+    winner, killed = determine_winner(state)
+    
+    assert winner == "VILLAGE", f"Expected VILLAGE to win, got {winner}"
+    assert "Alice" in killed, "Alice (werewolf) should be killed"
+    
+    print("  ✓ Village wins when werewolf receives most votes")
+
+
+def test_win_condition_no_werewolf_killed():
+    """Test: Werewolf wins when no werewolf is killed."""
+    print("\n=== Test: Werewolf Wins (No Werewolf Killed) ===")
+    
     players = [
-        Player(name="A", model="test", role=Role.TOWN, is_alive=True),
-        Player(name="B", model="test", role=Role.TOWN, is_alive=True),
-        Player(name="C", model="test", role=Role.MAFIA, is_alive=True),
+        Player(name="Alice", model="test", original_role=Role.WEREWOLF, current_role=Role.WEREWOLF),
+        Player(name="Bob", model="test", original_role=Role.SEER, current_role=Role.SEER),
+        Player(name="Charlie", model="test", original_role=Role.VILLAGER, current_role=Role.VILLAGER),
     ]
-    state = GameState(players=players)
-    living_mafia = len(state.living_mafia)
-    living_town = len(state.living_town)
-    winner = None
-    if living_mafia == 0:
-        winner = "TOWN"
-    elif living_mafia >= living_town:
-        winner = "MAFIA"
     
-    results.record(
-        "Game continues when town > mafia",
-        winner is None,
-        f"Expected None, got {winner}"
+    state = GameState(
+        players=players,
+        center_cards=[Role.ROBBER, Role.DRUNK, Role.TROUBLEMAKER],
+        original_assignments={p.name: p.original_role for p in players}
     )
+    
+    # Everyone votes for Bob (not a werewolf)
+    state.current_votes = {
+        "Alice": "Bob",
+        "Bob": "Charlie",
+        "Charlie": "Bob"
+    }
+    
+    winner, killed = determine_winner(state)
+    
+    assert winner == "WEREWOLF", f"Expected WEREWOLF to win, got {winner}"
+    assert "Bob" in killed, "Bob should be killed"
+    
+    print("  ✓ Werewolf wins when non-werewolf receives most votes")
 
 
-# =============================================================================
-# VOTE RESOLUTION TESTS
-# =============================================================================
-
-def test_vote_resolution():
-    """Test voting phase logic."""
-    print("\n🗳️ VOTE RESOLUTION TESTS")
+def test_win_condition_no_werewolves_in_game():
+    """Test: Village wins if no werewolves and no one dies."""
+    print("\n=== Test: No Werewolves in Game ===")
     
-    # Test 1: Clear majority lynches target
-    votes = {"A": "C", "B": "C", "C": "A"}
-    vote_counts = Counter(votes.values())
-    max_votes = max(vote_counts.values())
-    top_voted = [name for name, count in vote_counts.items() if count == max_votes]
-    
-    results.record(
-        "Clear majority lynches target",
-        len(top_voted) == 1 and top_voted[0] == "C",
-        f"Expected ['C'], got {top_voted}"
-    )
-    
-    # Test 2: Tie results in no lynch
-    votes = {"A": "C", "B": "D", "C": "A", "D": "B"}
-    vote_counts = Counter(votes.values())
-    max_votes = max(vote_counts.values())
-    top_voted = [name for name, count in vote_counts.items() if count == max_votes]
-    is_tie = len(top_voted) > 1
-    
-    results.record(
-        "Tie results in no lynch",
-        is_tie,
-        f"Expected tie, got single winner: {top_voted}"
-    )
-    
-    # Test 3: Empty votes = no lynch
-    votes = {}
-    is_empty = len(votes) == 0
-    
-    results.record(
-        "Empty votes results in no lynch",
-        is_empty,
-        "Expected empty votes"
-    )
-    
-    # Test 4: Self-votes are allowed
-    votes_with_self = {"A": "A", "B": "C", "C": "B"}
-    # Self-votes should count - A voting for A means A gets 1 vote
-    vote_counts = Counter(votes_with_self.values())
-    
-    results.record(
-        "Self-votes are allowed and counted",
-        vote_counts["A"] == 1,
-        f"Self-vote A->A should count: {vote_counts}"
-    )
-
-
-# =============================================================================
-# DOCTOR PROTECTION TESTS
-# =============================================================================
-
-def test_doctor_protection():
-    """Test doctor protection mechanics."""
-    print("\n💉 DOCTOR PROTECTION TESTS")
-    
-    # Test 1: Doctor saves mafia target
-    kill_target = Player(name="Target", model="test", role=Role.TOWN, is_alive=True)
-    saved_player = Player(name="Target", model="test", role=Role.TOWN, is_alive=True)
-    
-    kill_blocked = (saved_player and kill_target.name == saved_player.name)
-    
-    results.record(
-        "Doctor saves mafia target",
-        kill_blocked,
-        "Doctor protection should block kill"
-    )
-    
-    # Test 2: Doctor protects wrong person - kill succeeds
-    kill_target = Player(name="Target", model="test", role=Role.TOWN, is_alive=True)
-    saved_player = Player(name="Other", model="test", role=Role.TOWN, is_alive=True)
-    
-    kill_blocked = (saved_player and kill_target.name == saved_player.name)
-    
-    results.record(
-        "Kill succeeds when doctor protects wrong person",
-        not kill_blocked,
-        "Kill should succeed when doctor protects different person"
-    )
-    
-    # Test 3: Doctor can protect themselves
-    doctor = Player(name="Doc", model="test", role=Role.DOCTOR, is_alive=True)
-    living_players = ["Doc", "A", "B"]
-    can_protect_self = doctor.name in living_players
-    
-    results.record(
-        "Doctor can protect themselves",
-        can_protect_self,
-        "Doctor should be able to protect self"
-    )
-    
-    # Test 4: Consecutive protection rule - can't protect same twice
-    last_protected = "Alice"
-    current_choice = "Alice"
-    valid_targets_without_last = [p for p in ["Alice", "Bob", "Charlie"] if p != last_protected]
-    
-    results.record(
-        "Consecutive protection - same target excluded",
-        current_choice not in valid_targets_without_last,
-        "Same target should be excluded from valid choices"
-    )
-    
-    # Test 5: Can protect different person after first protection
-    last_protected = "Alice"
-    current_choice = "Bob"
-    is_valid = current_choice != last_protected
-    
-    results.record(
-        "Can protect different person next night",
-        is_valid,
-        "Different target should be valid"
-    )
-
-
-# =============================================================================
-# DETECTIVE INVESTIGATION TESTS
-# =============================================================================
-
-def test_detective_investigation():
-    """Test detective investigation mechanics."""
-    print("\n🔍 DETECTIVE INVESTIGATION TESTS")
-    
-    # Test 1: Investigating mafia returns True
-    target = Player(name="Mafia", model="test", role=Role.MAFIA, is_alive=True)
-    is_mafia = target.role == Role.MAFIA
-    
-    results.record(
-        "Investigating mafia returns True",
-        is_mafia,
-        f"Expected True, got {is_mafia}"
-    )
-    
-    # Test 2: Investigating town returns False
-    target = Player(name="Town", model="test", role=Role.TOWN, is_alive=True)
-    is_mafia = target.role == Role.MAFIA
-    
-    results.record(
-        "Investigating town returns False",
-        not is_mafia,
-        f"Expected False, got {is_mafia}"
-    )
-    
-    # Test 3: Investigating doctor returns False
-    target = Player(name="Doc", model="test", role=Role.DOCTOR, is_alive=True)
-    is_mafia = target.role == Role.MAFIA
-    
-    results.record(
-        "Investigating doctor returns False (not mafia)",
-        not is_mafia,
-        f"Expected False, got {is_mafia}"
-    )
-    
-    # Test 4: Investigating detective returns False
-    target = Player(name="Det", model="test", role=Role.DETECTIVE, is_alive=True)
-    is_mafia = target.role == Role.MAFIA
-    
-    results.record(
-        "Investigating detective returns False (not mafia)",
-        not is_mafia,
-        f"Expected False, got {is_mafia}"
-    )
-
-
-# =============================================================================
-# MAFIA COORDINATION TESTS
-# =============================================================================
-
-def test_mafia_coordination():
-    """Test mafia kill vote resolution."""
-    print("\n🔪 MAFIA COORDINATION TESTS")
-    
-    # Test 1: Single mafia - their target is used
-    mafia_votes = ["Diana"]
-    vote_counts = Counter(mafia_votes)
-    final_target = vote_counts.most_common(1)[0][0]
-    
-    results.record(
-        "Single mafia vote uses their target",
-        final_target == "Diana",
-        f"Expected Diana, got {final_target}"
-    )
-    
-    # Test 2: Two mafia agree - target is killed
-    mafia_votes = ["Diana", "Diana"]
-    vote_counts = Counter(mafia_votes)
-    final_target = vote_counts.most_common(1)[0][0]
-    
-    results.record(
-        "Two mafia agree on target",
-        final_target == "Diana",
-        f"Expected Diana, got {final_target}"
-    )
-    
-    # Test 3: Two mafia disagree - tie means no kill
-    mafia_votes = ["Diana", "Charlie"]
-    vote_counts = Counter(mafia_votes)
-    max_votes = max(vote_counts.values())
-    top_voted = [t for t, c in vote_counts.items() if c == max_votes]
-    is_tie = len(top_voted) > 1
-    final_target = None if is_tie else top_voted[0]
-    
-    results.record(
-        "Two mafia disagree - tie means no kill",
-        final_target is None,
-        f"Expected None (no kill), got {final_target}"
-    )
-    
-    # Test 4: Three mafia - majority wins
-    mafia_votes = ["Diana", "Diana", "Charlie"]
-    vote_counts = Counter(mafia_votes)
-    final_target = vote_counts.most_common(1)[0][0]
-    
-    results.record(
-        "Three mafia - majority wins",
-        final_target == "Diana",
-        f"Expected Diana, got {final_target}"
-    )
-    
-    # Test 5: Mafia cannot target another mafia (handled in prompts)
-    mafia_members = ["Alice", "Bob"]
-    living_players = ["Alice", "Bob", "Charlie", "Diana"]
-    valid_targets = [p for p in living_players if p not in mafia_members]
-    
-    results.record(
-        "Mafia targets exclude other mafia",
-        "Alice" not in valid_targets and "Bob" not in valid_targets,
-        f"Mafia should not be in targets: {valid_targets}"
-    )
-
-
-# =============================================================================
-# DEATH REVEAL TESTS
-# =============================================================================
-
-def test_death_reveals():
-    """Test what information is revealed on death."""
-    print("\n☠️ DEATH REVEAL TESTS")
-    
-    # Current implementation: reveal "Mafia" or "not Mafia", not exact role
-    
-    def get_alignment_string(player: Player) -> str:
-        return "Mafia" if player.role == Role.MAFIA else "not Mafia"
-    
-    # Test 1: Mafia death reveals "Mafia"
-    mafia = Player(name="M", model="test", role=Role.MAFIA, is_alive=False)
-    reveal = get_alignment_string(mafia)
-    
-    results.record(
-        "Mafia death reveals 'Mafia'",
-        reveal == "Mafia",
-        f"Expected 'Mafia', got '{reveal}'"
-    )
-    
-    # Test 2: Town death reveals "not Mafia"
-    town = Player(name="T", model="test", role=Role.TOWN, is_alive=False)
-    reveal = get_alignment_string(town)
-    
-    results.record(
-        "Town death reveals 'not Mafia'",
-        reveal == "not Mafia",
-        f"Expected 'not Mafia', got '{reveal}'"
-    )
-    
-    # Test 3: Doctor death reveals "not Mafia" (not "Doctor")
-    doctor = Player(name="D", model="test", role=Role.DOCTOR, is_alive=False)
-    reveal = get_alignment_string(doctor)
-    
-    results.record(
-        "Doctor death reveals 'not Mafia' (not exact role)",
-        reveal == "not Mafia" and "Doctor" not in reveal,
-        f"Expected 'not Mafia', got '{reveal}'"
-    )
-    
-    # Test 4: Detective death reveals "not Mafia" (not "Detective")
-    detective = Player(name="D", model="test", role=Role.DETECTIVE, is_alive=False)
-    reveal = get_alignment_string(detective)
-    
-    results.record(
-        "Detective death reveals 'not Mafia' (not exact role)",
-        reveal == "not Mafia" and "Detective" not in reveal,
-        f"Expected 'not Mafia', got '{reveal}'"
-    )
-
-
-# =============================================================================
-# EDGE CASE TESTS
-# =============================================================================
-
-def test_edge_cases():
-    """Test edge cases and unusual game states."""
-    print("\n🔧 EDGE CASE TESTS")
-    
-    # Test 1: All players dead is handled
+    # All werewolves in center
     players = [
-        Player(name="A", model="test", role=Role.TOWN, is_alive=False),
-        Player(name="B", model="test", role=Role.MAFIA, is_alive=False),
+        Player(name="Alice", model="test", original_role=Role.SEER, current_role=Role.SEER),
+        Player(name="Bob", model="test", original_role=Role.ROBBER, current_role=Role.ROBBER),
+        Player(name="Charlie", model="test", original_role=Role.VILLAGER, current_role=Role.VILLAGER),
     ]
-    state = GameState(players=players)
     
-    results.record(
-        "GameState handles all players dead",
-        len(state.living_players) == 0,
-        "Should have 0 living players"
+    state = GameState(
+        players=players,
+        center_cards=[Role.WEREWOLF, Role.WEREWOLF, Role.DRUNK],
+        original_assignments={p.name: p.original_role for p in players}
     )
     
-    # Test 2: Single player remaining
+    # Everyone votes no_one
+    state.current_votes = {
+        "Alice": "no_one",
+        "Bob": "no_one",
+        "Charlie": "no_one"
+    }
+    
+    winner, killed = determine_winner(state)
+    
+    assert winner == "VILLAGE", f"Expected VILLAGE to win (no werewolves, no kill), got {winner}"
+    assert len(killed) == 0, "No one should be killed"
+    
+    print("  ✓ Village wins when no werewolves and no one is killed")
+    
+    # Test: If someone IS killed and no werewolves, werewolf team wins
+    state.current_votes = {
+        "Alice": "Bob",
+        "Bob": "Alice",
+        "Charlie": "Alice"
+    }
+    
+    winner, killed = determine_winner(state)
+    
+    assert winner == "WEREWOLF", f"Expected WEREWOLF to win (no werewolves but kill), got {winner}"
+    
+    print("  ✓ Werewolf team wins when no werewolves but village kills someone")
+
+
+def test_win_condition_tanner():
+    """Test: Tanner wins if Tanner is killed."""
+    print("\n=== Test: Tanner Win Condition ===")
+    
     players = [
-        Player(name="A", model="test", role=Role.TOWN, is_alive=True),
-        Player(name="B", model="test", role=Role.MAFIA, is_alive=False),
+        Player(name="Alice", model="test", original_role=Role.TANNER, current_role=Role.TANNER),
+        Player(name="Bob", model="test", original_role=Role.WEREWOLF, current_role=Role.WEREWOLF),
+        Player(name="Charlie", model="test", original_role=Role.VILLAGER, current_role=Role.VILLAGER),
     ]
-    state = GameState(players=players)
     
-    results.record(
-        "Single player remaining works",
-        len(state.living_players) == 1,
-        "Should have 1 living player"
+    state = GameState(
+        players=players,
+        center_cards=[Role.SEER, Role.ROBBER, Role.DRUNK],
+        original_assignments={p.name: p.original_role for p in players}
     )
     
-    # Test 3: living_mafia and living_town are correct
+    # Everyone votes for Alice (the Tanner)
+    state.current_votes = {
+        "Alice": "Bob",
+        "Bob": "Alice",
+        "Charlie": "Alice"
+    }
+    
+    winner, killed = determine_winner(state)
+    
+    assert winner == "TANNER", f"Expected TANNER to win, got {winner}"
+    assert "Alice" in killed, "Alice (Tanner) should be killed"
+    
+    print("  ✓ Tanner wins when they are killed")
+
+
+def test_vote_tie():
+    """Test: Tied votes result in multiple deaths."""
+    print("\n=== Test: Vote Tie ===")
+    
     players = [
-        Player(name="A", model="test", role=Role.TOWN, is_alive=True),
-        Player(name="B", model="test", role=Role.DOCTOR, is_alive=True),
-        Player(name="C", model="test", role=Role.DETECTIVE, is_alive=True),
-        Player(name="D", model="test", role=Role.MAFIA, is_alive=True),
-        Player(name="E", model="test", role=Role.MAFIA, is_alive=False),
+        Player(name="Alice", model="test", original_role=Role.WEREWOLF, current_role=Role.WEREWOLF),
+        Player(name="Bob", model="test", original_role=Role.SEER, current_role=Role.SEER),
+        Player(name="Charlie", model="test", original_role=Role.VILLAGER, current_role=Role.VILLAGER),
+        Player(name="Diana", model="test", original_role=Role.ROBBER, current_role=Role.ROBBER),
     ]
-    state = GameState(players=players)
     
-    # living_town includes TOWN, DOCTOR, DETECTIVE
-    results.record(
-        "living_town includes all non-mafia roles",
-        len(state.living_town) == 3,
-        f"Expected 3 living town, got {len(state.living_town)}"
+    state = GameState(
+        players=players,
+        center_cards=[Role.DRUNK, Role.TROUBLEMAKER, Role.VILLAGER],
+        original_assignments={p.name: p.original_role for p in players}
     )
     
-    results.record(
-        "living_mafia counts correctly",
-        len(state.living_mafia) == 1,
-        f"Expected 1 living mafia, got {len(state.living_mafia)}"
+    # Tie between Alice and Bob
+    state.current_votes = {
+        "Alice": "Bob",
+        "Bob": "Alice",
+        "Charlie": "Alice",
+        "Diana": "Bob"
+    }
+    
+    winner, killed = determine_winner(state)
+    
+    assert "Alice" in killed and "Bob" in killed, \
+        f"Both Alice and Bob should die in tie, got {killed}"
+    assert winner == "VILLAGE", f"Village should win (werewolf Alice died), got {winner}"
+    
+    print("  ✓ Tied votes result in multiple deaths")
+    print("  ✓ Village wins if werewolf is among tied players")
+
+
+def test_hunter_ability():
+    """Test: Hunter kills their vote target when they die."""
+    print("\n=== Test: Hunter Ability ===")
+    
+    players = [
+        Player(name="Alice", model="test", original_role=Role.HUNTER, current_role=Role.HUNTER),
+        Player(name="Bob", model="test", original_role=Role.WEREWOLF, current_role=Role.WEREWOLF),
+        Player(name="Charlie", model="test", original_role=Role.VILLAGER, current_role=Role.VILLAGER),
+    ]
+    
+    state = GameState(
+        players=players,
+        center_cards=[Role.SEER, Role.ROBBER, Role.DRUNK],
+        original_assignments={p.name: p.original_role for p in players}
     )
+    
+    # Alice (Hunter) gets killed, but voted for Bob (Werewolf)
+    state.current_votes = {
+        "Alice": "Bob",      # Hunter votes for Werewolf
+        "Bob": "Alice",      # Werewolf votes for Hunter
+        "Charlie": "Alice"   # Villager votes for Hunter
+    }
+    
+    winner, killed = determine_winner(state)
+    
+    # Hunter should take the werewolf with them
+    assert "Alice" in killed, "Alice (Hunter) should die"
+    assert "Bob" in killed, "Bob (Werewolf) should die from Hunter ability"
+    assert winner == "VILLAGE", f"Village should win (werewolf died), got {winner}"
+    
+    print("  ✓ Hunter kills their vote target when they die")
+    print("  ✓ Village can win via Hunter ability")
 
 
-# =============================================================================
-# MAIN
-# =============================================================================
+def test_robber_swap_changes_winner():
+    """Test: Robber swap can change who wins."""
+    print("\n=== Test: Robber Swap Changes Teams ===")
+    
+    # Setup: Bob (Robber) steals Alice's (Werewolf) card
+    players = [
+        Player(name="Alice", model="test", original_role=Role.WEREWOLF, current_role=Role.ROBBER),  # Was robbed
+        Player(name="Bob", model="test", original_role=Role.ROBBER, current_role=Role.WEREWOLF),   # Now werewolf!
+        Player(name="Charlie", model="test", original_role=Role.VILLAGER, current_role=Role.VILLAGER),
+        Player(name="Diana", model="test", original_role=Role.SEER, current_role=Role.SEER),
+    ]
+    
+    state = GameState(
+        players=players,
+        center_cards=[Role.DRUNK, Role.TROUBLEMAKER, Role.VILLAGER],
+        original_assignments={p.name: p.original_role for p in players}
+    )
+    
+    # Village votes for Alice (who they think is werewolf)
+    # But Alice is now Robber, Bob is the actual werewolf!
+    state.current_votes = {
+        "Alice": "Bob",
+        "Bob": "Alice",
+        "Charlie": "Alice",
+        "Diana": "Alice"
+    }
+    
+    winner, killed = determine_winner(state)
+    
+    assert "Alice" in killed, "Alice should be killed"
+    assert "Bob" not in killed, "Bob should NOT be killed"
+    assert winner == "WEREWOLF", f"Werewolf (Bob) should win since Alice is now Robber, got {winner}"
+    
+    print("  ✓ Robber swap correctly changes team affiliations")
+    print("  ✓ Win condition uses current roles, not original roles")
 
-def main():
+
+def test_drunk_swap():
+    """Test: Drunk swap with center."""
+    print("\n=== Test: Drunk Swap with Center ===")
+    
+    players = [
+        Player(name="Alice", model="test", original_role=Role.DRUNK, current_role=Role.DRUNK),
+        Player(name="Bob", model="test", original_role=Role.SEER, current_role=Role.SEER),
+        Player(name="Charlie", model="test", original_role=Role.VILLAGER, current_role=Role.VILLAGER),
+    ]
+    
+    state = GameState(
+        players=players,
+        center_cards=[Role.WEREWOLF, Role.ROBBER, Role.TROUBLEMAKER],
+        original_assignments={p.name: p.original_role for p in players}
+    )
+    
+    # Drunk swaps with center position 0 (Werewolf)
+    state.swap_player_with_center("Alice", 0)
+    
+    assert state.get_player_by_name("Alice").current_role == Role.WEREWOLF, \
+        "Alice should now be werewolf"
+    assert state.center_cards[0] == Role.DRUNK, \
+        "Center 0 should now have Drunk"
+    
+    # Alice is now a werewolf but doesn't know it!
+    # If she gets killed, village wins
+    state.current_votes = {
+        "Alice": "Bob",
+        "Bob": "Alice",
+        "Charlie": "Alice"
+    }
+    
+    winner, killed = determine_winner(state)
+    
+    assert winner == "VILLAGE", f"Village should win (Alice is now werewolf), got {winner}"
+    
+    print("  ✓ Drunk swap changes player role")
+    print("  ✓ Drunk can unknowingly become werewolf")
+
+
+def run_all_tests():
+    """Run all QA tests."""
     print("=" * 60)
-    print("MAFIA GAME QA TEST SUITE")
+    print("ONE NIGHT ULTIMATE WEREWOLF - QA TESTS")
     print("=" * 60)
     
-    test_win_conditions()
-    test_vote_resolution()
-    test_doctor_protection()
-    test_detective_investigation()
-    test_mafia_coordination()
-    test_death_reveals()
-    test_edge_cases()
+    tests = [
+        test_role_selection,
+        test_team_assignments,
+        test_card_swapping,
+        test_win_condition_werewolf_killed,
+        test_win_condition_no_werewolf_killed,
+        test_win_condition_no_werewolves_in_game,
+        test_win_condition_tanner,
+        test_vote_tie,
+        test_hunter_ability,
+        test_robber_swap_changes_winner,
+        test_drunk_swap,
+    ]
     
-    success = results.summary()
+    passed = 0
+    failed = 0
     
-    print("\n📋 RULE CONFIGURATION DOCUMENTATION")
-    print("-" * 40)
-    print("""
-Current Implementation Rules:
-1. WIN CONDITIONS
-   - Town wins: All mafia eliminated
-   - Mafia wins: Mafia >= Town (living count)
-
-2. VOTING
-   - Tie: No lynch
-   - Self-votes: ALLOWED (count as normal votes)
-   - Invalid votes: Ignored
-
-3. DEATH REVEALS
-   - Shows: "Mafia" or "not Mafia"
-   - Does NOT reveal exact role (Doctor, Detective)
-
-4. DOCTOR
-   - Can protect self: YES
-   - Consecutive protection: NO (can't protect same person twice in a row)
-
-5. MAFIA COORDINATION
-   - Multiple mafia discuss privately (half day duration)
-   - Then vote on target
-   - Tie: NO KILL (mafia must agree on target)
-
-6. DETECTIVE
-   - Investigation returns: is_mafia (True/False)
-   - Results given same night (before day phase)
-""")
+    for test in tests:
+        try:
+            test()
+            passed += 1
+        except AssertionError as e:
+            failed += 1
+            print(f"\n  ✗ FAILED: {e}")
+        except Exception as e:
+            failed += 1
+            print(f"\n  ✗ ERROR: {e}")
     
-    return 0 if success else 1
+    print("\n" + "=" * 60)
+    print(f"RESULTS: {passed} passed, {failed} failed")
+    print("=" * 60)
+    
+    return failed == 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    success = run_all_tests()
+    sys.exit(0 if success else 1)

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Run a full game of LLM Mafia with web viewer.
+Run a full game of One Night Ultimate Werewolf with web viewer.
 
 Usage:
     python experiments/01_run_game.py [--day-duration SECONDS] [--port PORT]
     
-The web viewer will be available at http://localhost:8080
+The web viewer will be available at http://localhost:9000
 Open it in your browser to watch the game live.
 """
 
@@ -19,15 +19,14 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from infra.mafia import DEFAULT_PLAYER_NAMES, DEFAULT_ROLE_DISTRIBUTION
-from infra.game_engine import MafiaGame
+from infra.onuw import DEFAULT_PLAYER_NAMES, DEFAULT_ROLE_POOL, Role
+from infra.game_engine import ONUWGame
 from infra.events import reset_broadcaster, set_web_queue
 from web.app import app, set_game, get_event_queue
 
 
 def run_flask(port: int):
     """Run Flask in a separate thread."""
-    # Disable Flask's default logging for cleaner output
     import logging
     log = logging.getLogger('werkzeug')
     log.setLevel(logging.WARNING)
@@ -38,27 +37,21 @@ def run_flask(port: int):
         print(f"Flask error: {e}")
 
 
-async def run_game(day_duration: int, model: str, turn_limit: int | None) -> tuple[str, dict]:
-    """Run the mafia game. Returns (winner, usage_stats)."""
-    # Reset event broadcaster for clean state
+async def run_game(day_duration: int, model: str, role_pool: list[Role], player_names: list[str]) -> tuple[str, dict]:
+    """Run the ONUW game. Returns (winner, usage_stats)."""
     reset_broadcaster()
     
-    # Create game
-    game = MafiaGame(
-        player_names=DEFAULT_PLAYER_NAMES,
-        role_distribution=DEFAULT_ROLE_DISTRIBUTION,
+    game = ONUWGame(
+        player_names=player_names,
+        role_pool=role_pool,
         model=model,
         day_duration_seconds=day_duration,
-        turn_limit=turn_limit,
     )
     
-    # Set up web app with game reference
     set_game(game)
     
-    # Run the game
     winner = await game.run_game()
     
-    # Get usage stats
     usage_stats = {
         "usage": game.llm_client.usage_stats,
         "cache": game.llm_client.cache_stats,
@@ -68,12 +61,12 @@ async def run_game(day_duration: int, model: str, turn_limit: int | None) -> tup
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run an LLM Mafia game with web viewer")
+    parser = argparse.ArgumentParser(description="Run an One Night Ultimate Werewolf game with web viewer")
     parser.add_argument(
         "--day-duration", 
         type=int, 
         default=300,
-        help="Duration of each day phase in seconds (default: 300 = 5 minutes)"
+        help="Duration of day discussion phase in seconds (default: 300 = 5 minutes)"
     )
     parser.add_argument(
         "--port",
@@ -88,10 +81,10 @@ def main():
         help="OpenAI model to use for players (default: gpt-5-mini)"
     )
     parser.add_argument(
-        "--turn-limit",
+        "--players",
         type=int,
-        default=None,
-        help="Limit number of turns (night+day+vote = 1 turn). Default: no limit"
+        default=5,
+        help="Number of players (default: 5)"
     )
     parser.add_argument(
         "--keep-alive",
@@ -100,13 +93,20 @@ def main():
     )
     args = parser.parse_args()
     
+    # Use default player names, trim to requested count
+    player_names = DEFAULT_PLAYER_NAMES[:args.players]
+    
+    # Use default role pool - will select players + 3 roles
+    role_pool = DEFAULT_ROLE_POOL
+    
     print("=" * 60)
-    print("LLM MAFIA")
+    print("ONE NIGHT ULTIMATE WEREWOLF")
     print("=" * 60)
     print(f"Model: {args.model}")
+    print(f"Players: {args.players}")
     print(f"Day duration: {args.day_duration} seconds")
-    print(f"Turn limit: {args.turn_limit or 'none'}")
     print(f"Web viewer port: {args.port}")
+    print(f"Available roles: {[r.value for r in role_pool]}")
     print("=" * 60)
     
     # Connect event system to web queue
@@ -116,15 +116,13 @@ def main():
     flask_thread = threading.Thread(target=run_flask, args=(args.port,), daemon=True)
     flask_thread.start()
     
-    # Give Flask a moment to start
     time.sleep(0.5)
     
     print(f"\n🌐 Web viewer available at: http://localhost:{args.port}")
     print(f"   Open this URL in your browser to watch the game!\n")
     
-    # Run the game
     try:
-        winner, usage_stats = asyncio.run(run_game(args.day_duration, args.model, args.turn_limit))
+        winner, usage_stats = asyncio.run(run_game(args.day_duration, args.model, role_pool, player_names))
         print(f"\n{'=' * 60}")
         print(f"FINAL RESULT: {winner} WINS!")
         print(f"{'=' * 60}")
@@ -133,9 +131,9 @@ def main():
         usage = usage_stats["usage"]
         cache = usage_stats["cache"]
         
-        # GPT-5-nano pricing (per 1M tokens)
-        INPUT_PRICE = 0.05   # $0.05 per 1M input tokens
-        OUTPUT_PRICE = 0.40  # $0.40 per 1M output tokens
+        # Pricing estimates (per 1M tokens) - adjust for your model
+        INPUT_PRICE = 0.15
+        OUTPUT_PRICE = 0.60
         
         input_cost = (usage['prompt_tokens'] / 1_000_000) * INPUT_PRICE
         output_cost = (usage['completion_tokens'] / 1_000_000) * OUTPUT_PRICE
@@ -148,13 +146,12 @@ def main():
         print(f"   Total tokens: {usage['total_tokens']:,}")
         print(f"\n   Cache hits: {int(cache['hits'])} ({cache['hit_rate']*100:.1f}% hit rate)")
         print(f"   Cache misses: {int(cache['misses'])}")
-        print(f"\n💰 ESTIMATED COST (gpt-5-mini)")
+        print(f"\n💰 ESTIMATED COST ({args.model})")
         print(f"   Input:  ${input_cost:.4f}")
         print(f"   Output: ${output_cost:.4f}")
         print(f"   Total:  ${total_cost:.4f}")
         
         if args.keep_alive:
-            # Keep the server running so users can review the game
             print("\nGame complete. Web viewer will remain active.")
             print("Press Ctrl+C to exit.")
             

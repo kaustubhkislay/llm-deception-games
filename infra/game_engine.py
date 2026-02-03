@@ -1,4 +1,4 @@
-"""Game engine with night/day/voting phases and win conditions."""
+"""Game engine for One Night Ultimate Werewolf."""
 
 import asyncio
 import json
@@ -9,11 +9,11 @@ from pathlib import Path
 from typing import Optional
 from collections import Counter
 
-from .mafia import (
-    Player, Role, Phase, GameState, PublicMessage, 
-    NightResult, VoteResult, Action, ActionType,
+from .onuw import (
+    Player, Role, Phase, GameState, PublicMessage, NightAction, VoteResult,
     GameEvent, EventType, ChatMessage,
-    DEFAULT_PLAYER_NAMES, DEFAULT_ROLE_DISTRIBUTION, DAY_PHASE_DURATION_SECONDS
+    DEFAULT_PLAYER_NAMES, DEFAULT_ROLE_POOL, DAY_PHASE_DURATION_SECONDS,
+    NIGHT_ACTION_ORDER, PASSIVE_ROLES, select_roles_for_game, determine_winner, get_team
 )
 from .llm_client import get_llm_client, CachedLLMClient
 from .player import PlayerAgent
@@ -27,13 +27,10 @@ LOG_DIR.mkdir(exist_ok=True)
 
 def setup_game_logger(game_id: str) -> logging.Logger:
     """Set up a logger for a specific game that writes to a file."""
-    logger = logging.getLogger(f"mafia_game_{game_id}")
+    logger = logging.getLogger(f"onuw_game_{game_id}")
     logger.setLevel(logging.DEBUG)
-    
-    # Clear existing handlers
     logger.handlers = []
     
-    # File handler - writes immediately (no buffering)
     log_file = LOG_DIR / f"game_{game_id}.log"
     file_handler = logging.FileHandler(log_file, mode='a')
     file_handler.setLevel(logging.DEBUG)
@@ -68,26 +65,15 @@ class GameEventLog:
 
 
 def load_game_from_log(log_path: str) -> dict:
-    """
-    Load and reconstruct game state from a JSON lines log file.
-    
-    Returns a dict compatible with the web viewer's expected format,
-    including phase_history for timeline navigation with all events grouped by phase.
-    """
-    players: dict[str, dict] = {}  # name -> {role, is_alive}
+    """Load and reconstruct game state from a JSON lines log file."""
+    players: dict[str, dict] = {}
+    center_cards: list[str] = []
     all_messages: list[dict] = []
-    all_votes: dict[str, dict] = {}  # voter -> {target, reasoning}
+    all_votes: dict[str, dict] = {}
     phase = "GAME_OVER"
-    day_number = 1
     winner: Optional[str] = None
-    
-    # Track phase history for timeline
     phase_history: list[dict] = []
-    
-    # Track player thoughts for replay
-    player_thoughts: dict[str, dict[str, list]] = {}  # {player_name: {phase_key: [thoughts]}}
-    
-    # Current phase accumulator
+    player_thoughts: dict[str, dict[str, list]] = {}
     current_phase_events: list[dict] = []
     current_phase_messages: list[dict] = []
     current_phase_votes: dict[str, dict] = {}
@@ -95,15 +81,16 @@ def load_game_from_log(log_path: str) -> dict:
     
     def snapshot_players():
         return [
-            {"name": name, "role": info["role"], "is_alive": info["is_alive"]}
+            {"name": name, "role": info["current_role"], "original_role": info["original_role"]}
             for name, info in players.items()
         ]
     
-    def save_phase_snapshot(phase_name: str, day_num: int):
+    def save_phase_snapshot(phase_name: str):
         phase_history.append({
             "phase": phase_name,
-            "dayNumber": day_num,
+            "dayNumber": 1,  # ONUW is always day 1
             "players": snapshot_players(),
+            "centerCards": list(center_cards),
             "events": list(current_phase_events),
             "messages": list(current_phase_messages),
             "votes": dict(current_phase_votes),
@@ -123,26 +110,22 @@ def load_game_from_log(log_path: str) -> dict:
             
             if event_type == "GAME_INIT":
                 for p in data.get("players", []):
-                    players[p["name"]] = {"role": p["role"], "is_alive": True}
+                    players[p["name"]] = {
+                        "original_role": p["original_role"],
+                        "current_role": p["current_role"]
+                    }
+                center_cards = data.get("center_cards", [])
             
             elif event_type == "PHASE_CHANGE":
-                # Save current phase before starting new one (if we have one)
-                if phase != "GAME_OVER" and (current_phase_events or current_phase_messages or current_phase_votes):
-                    # Don't save empty phases
-                    pass
+                if phase != "GAME_OVER" and current_phase_events:
+                    pass  # Phase already saved
                 
-                # Start new phase
                 phase = data.get("phase", phase)
-                day_number = data.get("day_number", day_number)
-                
-                # Clear accumulators for new phase
                 current_phase_events = []
                 current_phase_messages = []
                 current_phase_votes = {}
                 current_phase_gm_messages = []
-                
-                # Save the phase entry point
-                save_phase_snapshot(phase, day_number)
+                save_phase_snapshot(phase)
             
             elif event_type == "GM_MESSAGE":
                 gm_msg = {
@@ -152,67 +135,42 @@ def load_game_from_log(log_path: str) -> dict:
                 current_phase_gm_messages.append(gm_msg)
                 current_phase_events.append({"type": "gm_message", "data": gm_msg})
                 
-                # Update the last phase snapshot
                 if phase_history:
                     phase_history[-1]["events"] = list(current_phase_events)
                     phase_history[-1]["gmMessages"] = list(current_phase_gm_messages)
             
-            elif event_type == "NIGHT_REASONING":
-                reasoning_data = {
-                    "type": "night_reasoning",
-                    "role": data.get("role"),
+            elif event_type == "NIGHT_ACTION":
+                action_data = {
+                    "type": "night_action",
                     "player": data.get("player"),
-                    "target": data.get("target"),
-                    "reasoning": data.get("reasoning"),
+                    "role": data.get("role"),
+                    "action": data.get("action"),
+                    "targets": data.get("targets"),
                     "result": data.get("result"),
                     "timestamp": timestamp
                 }
-                current_phase_events.append(reasoning_data)
+                current_phase_events.append(action_data)
                 
                 if phase_history:
                     phase_history[-1]["events"] = list(current_phase_events)
             
-            elif event_type == "MAFIA_CHAT":
-                msg_data = {
-                    "type": "mafia_chat",
-                    "sender": data.get("sender"),
-                    "content": data.get("content"),
-                    "timestamp": data.get("timestamp", timestamp)
-                }
-                current_phase_events.append(msg_data)
-                
-                if phase_history:
-                    phase_history[-1]["events"] = list(current_phase_events)
-            
-            elif event_type == "MAFIA_KILL_INTENTION":
-                intention_data = {
-                    "type": "kill_intention",
-                    "player": data.get("player"),
-                    "target": data.get("target"),
+            elif event_type == "CARD_SWAP":
+                swap_data = {
+                    "type": "card_swap",
+                    "location1": data.get("location1"),
+                    "location2": data.get("location2"),
                     "timestamp": timestamp
                 }
-                current_phase_events.append(intention_data)
+                current_phase_events.append(swap_data)
+                
+                # Update player roles after swap
+                for p_name, p_data in data.get("updated_players", {}).items():
+                    if p_name in players:
+                        players[p_name]["current_role"] = p_data.get("current_role")
                 
                 if phase_history:
                     phase_history[-1]["events"] = list(current_phase_events)
-            
-            elif event_type == "PLAYER_DEATH":
-                player_name = data.get("player")
-                if player_name and player_name in players:
-                    players[player_name]["is_alive"] = False
-                
-                death_data = {
-                    "type": "death",
-                    "player": player_name,
-                    "cause": data.get("cause"),
-                    "was_mafia": data.get("was_mafia"),
-                    "timestamp": timestamp
-                }
-                current_phase_events.append(death_data)
-                
-                if phase_history:
                     phase_history[-1]["players"] = snapshot_players()
-                    phase_history[-1]["events"] = list(current_phase_events)
             
             elif event_type == "PUBLIC_MESSAGE":
                 msg = {
@@ -254,20 +212,7 @@ def load_game_from_log(log_path: str) -> dict:
                 result_data = {
                     "type": "vote_result",
                     "votes": data.get("votes", {}),
-                    "lynched": data.get("lynched"),
-                    "was_tie": data.get("was_tie"),
-                    "timestamp": timestamp
-                }
-                current_phase_events.append(result_data)
-                
-                if phase_history:
-                    phase_history[-1]["events"] = list(current_phase_events)
-            
-            elif event_type == "NIGHT_RESULT":
-                result_data = {
-                    "type": "night_result",
-                    "killed": data.get("killed"),
-                    "saved": data.get("saved"),
+                    "killed": data.get("killed", []),
                     "timestamp": timestamp
                 }
                 current_phase_events.append(result_data)
@@ -276,18 +221,15 @@ def load_game_from_log(log_path: str) -> dict:
                     phase_history[-1]["events"] = list(current_phase_events)
             
             elif event_type == "PLAYER_THOUGHT":
-                # Track player thoughts for replay
                 player_name = data.get("player_name")
                 thought_phase = data.get("phase", phase)
-                thought_day = data.get("day_number", day_number)
-                phase_key = f"{thought_day}_{thought_phase}"
+                phase_key = f"1_{thought_phase}"
                 
                 if player_name not in player_thoughts:
                     player_thoughts[player_name] = {}
                 if phase_key not in player_thoughts[player_name]:
                     player_thoughts[player_name][phase_key] = []
                 
-                # Add prompt and response as separate thought entries
                 player_thoughts[player_name][phase_key].append({
                     "role": "user",
                     "content": data.get("prompt")
@@ -300,28 +242,23 @@ def load_game_from_log(log_path: str) -> dict:
             
             elif event_type == "GAME_END":
                 winner = data.get("winner")
-                # Update final player states from game end data
                 for p in data.get("players", []):
                     if p["name"] in players:
-                        players[p["name"]]["is_alive"] = p["is_alive"]
-                        players[p["name"]]["role"] = p["role"]
+                        players[p["name"]]["current_role"] = p["current_role"]
                 
-                # Add final GAME_OVER phase
                 current_phase_events = []
                 current_phase_messages = []
                 current_phase_votes = {}
                 current_phase_gm_messages = []
-                save_phase_snapshot("GAME_OVER", day_number)
+                save_phase_snapshot("GAME_OVER")
     
-    # Build final state
     player_list = snapshot_players()
     
     return {
         "phase": phase,
-        "day_number": day_number,
+        "day_number": 1,
         "players": player_list,
-        "living_players": [p["name"] for p in player_list if p["is_alive"]],
-        "dead_players": [{"name": p["name"], "role": p["role"]} for p in player_list if not p["is_alive"]],
+        "center_cards": center_cards,
         "messages": all_messages,
         "current_votes": {k: v.get("target") for k, v in all_votes.items()},
         "winner": winner,
@@ -330,19 +267,25 @@ def load_game_from_log(log_path: str) -> dict:
     }
 
 
-class MafiaGame:
-    """Main game engine for LLM Mafia."""
+class ONUWGame:
+    """Main game engine for One Night Ultimate Werewolf."""
     
     def __init__(
         self,
-        player_names: list[str] = DEFAULT_PLAYER_NAMES,
-        role_distribution: list[Role] = DEFAULT_ROLE_DISTRIBUTION,
+        player_names: list[str] = None,
+        role_pool: list[Role] = None,
         model: str = "gpt-5-mini",
         day_duration_seconds: int = DAY_PHASE_DURATION_SECONDS,
-        turn_limit: Optional[int] = None,  # None means no limit
     ):
-        assert len(player_names) == len(role_distribution), \
-            f"Player count ({len(player_names)}) must match role count ({len(role_distribution)})"
+        if player_names is None:
+            player_names = DEFAULT_PLAYER_NAMES
+        if role_pool is None:
+            role_pool = DEFAULT_ROLE_POOL
+        
+        num_players = len(player_names)
+        required_roles = num_players + 3
+        assert len(role_pool) >= required_roles, \
+            f"Need at least {required_roles} roles for {num_players} players, have {len(role_pool)}"
         
         # Set up game logger
         self.game_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -351,25 +294,27 @@ class MafiaGame:
         
         self.model = model
         self.day_duration_seconds = day_duration_seconds
-        self.turn_limit = turn_limit
         self.llm_client = get_llm_client(use_cache=True)
         self.broadcaster = get_broadcaster()
         
-        # Sort player names alphabetically for consistent display order
+        # Select and distribute roles
+        player_roles, center_roles = select_roles_for_game(num_players, role_pool)
+        
+        # Sort player names alphabetically
         sorted_names = sorted(player_names)
         
-        # Shuffle roles for random assignment
-        shuffled_roles = list(role_distribution)
-        random.shuffle(shuffled_roles)
-        
-        # Create players with alphabetical names and random roles
+        # Create players - both original_role and current_role start the same
         self.players: list[Player] = [
-            Player(name=name, model=model, role=role)
-            for name, role in zip(sorted_names, shuffled_roles)
+            Player(name=name, model=model, original_role=role, current_role=role)
+            for name, role in zip(sorted_names, player_roles)
         ]
         
         # Initialize game state
-        self.state = GameState(players=self.players)
+        self.state = GameState(
+            players=self.players,
+            center_cards=center_roles,
+            original_assignments={p.name: p.original_role for p in self.players}
+        )
         
         # Communication infrastructure
         self._message_queues: dict[str, asyncio.Queue] = {
@@ -393,27 +338,28 @@ class MafiaGame:
         # Log game initialization
         self.logger.info(f"Game {self.game_id} initialized with {len(self.players)} players")
         for p in self.players:
-            self.logger.info(f"  Player: {p.name} | Role: {p.role.value}")
+            self.logger.info(f"  Player: {p.name} | Role: {p.original_role.value}")
+        self.logger.info(f"  Center cards: {[r.value for r in center_roles]}")
         
-        # JSON event log for replay
         self.event_log.log_event("GAME_INIT", {
             "game_id": self.game_id,
-            "players": [{"name": p.name, "role": p.role.value} for p in self.players]
+            "players": [{"name": p.name, "original_role": p.original_role.value, "current_role": p.current_role.value} for p in self.players],
+            "center_cards": [r.value for r in center_roles]
         })
         
         # Error tracking
-        self.errors: list[dict] = []  # List of error records
+        self.errors: list[dict] = []
         
         print(f"Game initialized with {len(self.players)} players:")
         for p in self.players:
-            print(f"  - {p.name}: {p.role.value}")
+            print(f"  - {p.name}: {p.original_role.value}")
+        print(f"Center cards: {[r.value for r in center_roles]}")
     
     def _track_error(self, error_type: str, details: dict) -> None:
         """Track an error for later analysis."""
         error = {
             "type": error_type,
             "timestamp": datetime.now().isoformat(),
-            "day_number": self.state.day_number,
             "phase": self.state.phase.value if self.state.phase else "UNKNOWN",
             **details
         }
@@ -436,15 +382,13 @@ class MafiaGame:
         msg = PublicMessage(
             sender_name=sender_name,
             content=content,
-            timestamp=datetime.now()  # Timestamp when message is sent (after inference)
+            timestamp=datetime.now()
         )
         self.state.public_messages.append(msg)
         
-        # Notify all players that a new message arrived
         self._new_message_event.set()
         self._new_message_event.clear()
         
-        # Broadcast to web viewers
         await self.broadcaster.broadcast(
             GameEvent(
                 event_type=EventType.PUBLIC_MESSAGE,
@@ -457,7 +401,6 @@ class MafiaGame:
             )
         )
         
-        # Log for replay
         self.event_log.log_event("PUBLIC_MESSAGE", {
             "id": msg.id,
             "sender": sender_name,
@@ -465,7 +408,6 @@ class MafiaGame:
             "timestamp": msg.timestamp.isoformat()
         })
         
-        # Show elapsed time since phase start
         elapsed_str = ""
         if self.state.phase_start_time:
             elapsed = (msg.timestamp - self.state.phase_start_time).total_seconds()
@@ -476,468 +418,238 @@ class MafiaGame:
         print(f"  [{elapsed_str}] {sender_name}: {content}")
     
     def _get_messages(self) -> list[PublicMessage]:
-        """Get all public messages (used by player agents)."""
+        """Get all public messages."""
         return self.state.public_messages.copy()
     
-    def _check_win_condition(self) -> Optional[str]:
-        """Check if the game has ended. Returns 'MAFIA' or 'TOWN' or None."""
-        living_mafia = len(self.state.living_mafia)
-        living_town = len(self.state.living_town)
+    async def _execute_night_action(self, player: Player) -> Optional[NightAction]:
+        """Execute a single player's night action based on their original role."""
+        role = player.original_role
+        agent = self.agents[player.name]
+        player_names = [p.name for p in self.players]
+        other_players = [n for n in player_names if n != player.name]
         
-        if living_mafia == 0:
-            return "TOWN"
-        if living_mafia >= living_town:
-            return "MAFIA"
-        return None
-    
-    def _update_agents_phase(self, phase: str, day: int) -> None:
-        """Update all agents with the current phase info."""
-        for agent in self.agents.values():
-            agent.set_phase(phase, day)
-    
-    async def _run_mafia_coordination(self, living_names: list[str]) -> Optional[str]:
-        """Run the mafia coordination phase. Returns kill target or None."""
-        living_mafia = [p for p in self.state.living_players if p.role == Role.MAFIA]
+        # Build context for this player's night action
+        context = {
+            "other_players": other_players,
+            "player_names": player_names,
+        }
         
-        if not living_mafia:
+        # Role-specific context
+        if role == Role.WEREWOLF:
+            # Find other werewolves
+            other_werewolves = [p.name for p in self.players 
+                              if p.original_role == Role.WEREWOLF and p.name != player.name]
+            context["other_werewolves"] = other_werewolves
+            
+        elif role == Role.MINION:
+            # Minion sees who the werewolves are
+            werewolves = [p.name for p in self.players if p.original_role == Role.WEREWOLF]
+            context["werewolves"] = werewolves
+            
+        elif role == Role.INSOMNIAC:
+            # Insomniac sees their current card (after all swaps)
+            context["current_role"] = player.current_role
+        
+        # Get the player's action
+        action = await agent.run_night_phase(context)
+        
+        if action is None:
             return None
         
-        if len(living_mafia) == 1:
-            # Single mafia - pick a target but still show reasoning
-            mafia = living_mafia[0]
-            print(f"\n  --- MAFIA COORDINATION (single mafia) ---")
-            target, reasoning = await self.agents[mafia.name].run_night_phase(living_names)
+        # Process the action and apply effects
+        result = None
+        
+        if action.action_type == "look_player":
+            # Seer looks at a player
+            target_name = action.targets[0]
+            target_player = self.state.get_player_by_name(target_name)
+            if target_player:
+                result = target_player.current_role.value
+                action.result = result
+                
+                # Tell the Seer what they saw
+                agent.add_game_event(f"You looked at {target_name}'s card: {result}")
+                
+        elif action.action_type == "look_center":
+            # Seer looks at two center cards
+            positions = [int(t.split("_")[1]) for t in action.targets]
+            roles = [self.state.center_cards[p].value for p in positions if 0 <= p < 3]
+            result = roles
+            action.result = result
             
-            # Broadcast the mafia's reasoning as a chat message
-            if reasoning:
-                print(f"    [MAFIA CHAT] {mafia.name}: {reasoning}")
-                self.logger.info(f"    MAFIA CHAT: {mafia.name}: {reasoning}")
-                await self.broadcaster.broadcast(
-                    GameEvent(
-                        event_type=EventType.MAFIA_CHAT,
-                        data={
-                            "sender": mafia.name,
-                            "content": reasoning,
-                            "timestamp": datetime.now().isoformat()
-                        }
-                    )
-                )
-                self.event_log.log_event("MAFIA_CHAT", {
-                    "sender": mafia.name,
-                    "content": reasoning,
-                    "timestamp": datetime.now().isoformat()
-                })
+            # Tell the Seer what they saw
+            agent.add_game_event(f"You looked at center cards: {roles}")
             
-            if target:
-                print(f"    [MAFIA INTENTION] {mafia.name} → {target}")
-                self.logger.info(f"  MAFIA {mafia.name} targets: {target}")
-                await self.broadcaster.broadcast(
-                    GameEvent(
-                        event_type=EventType.MAFIA_KILL_INTENTION,
-                        data={"player": mafia.name, "target": target}
-                    )
-                )
-                self.event_log.log_event("MAFIA_KILL_INTENTION", {"player": mafia.name, "target": target})
-            return target
-        
-        # Multiple mafia - run coordination phase with integrated voting
-        # 30 seconds per mafia member for discussion
-        discussion_duration = 30 * len(living_mafia)
-        print(f"\n  --- MAFIA COORDINATION ({discussion_duration}s) ---")
-        self.logger.info(f"  Mafia coordination phase - {len(living_mafia)} mafia members")
-        
-        # Shared message list for mafia private chat (includes intentions)
-        mafia_messages: list[dict] = []
-        mafia_message_event = asyncio.Event()
-        
-        # Track kill intentions (can be updated during discussion)
-        kill_intentions: dict[str, str] = {}
-        
-        async def send_mafia_message(sender: str, content: str) -> None:
-            msg = {
-                "type": "chat",
-                "sender": sender,
-                "content": content,
-                "timestamp": datetime.now().isoformat()
-            }
-            mafia_messages.append(msg)
-            mafia_message_event.set()
-            mafia_message_event.clear()
-            print(f"    [MAFIA CHAT] {sender}: {content}")
-            self.logger.info(f"    MAFIA CHAT: {sender}: {content}")
+        elif action.action_type == "rob":
+            # Robber swaps with target and sees new card
+            target_name = action.targets[0]
+            target_player = self.state.get_player_by_name(target_name)
+            if target_player:
+                # Swap cards
+                old_role = player.current_role
+                new_role = target_player.current_role
+                self.state.swap_player_cards(player.name, target_name)
+                
+                result = new_role.value
+                action.result = result
+                
+                # Tell the Robber their new role
+                agent.add_game_event(f"You robbed {target_name} and are now the {new_role.value}")
+                
+                # Log the swap
+                await self._log_card_swap(player.name, target_name)
+                
+        elif action.action_type == "swap":
+            # Troublemaker swaps two other players
+            player1_name, player2_name = action.targets
+            self.state.swap_player_cards(player1_name, player2_name)
             
-            # Broadcast mafia chat to web viewers
-            await self.broadcaster.broadcast(
-                GameEvent(
-                    event_type=EventType.MAFIA_CHAT,
-                    data=msg
-                )
+            result = f"Swapped {player1_name} and {player2_name}"
+            action.result = result
+            
+            # Log the swap
+            await self._log_card_swap(player1_name, player2_name)
+            
+        elif action.action_type == "drunk_swap":
+            # Drunk swaps with center card (blind)
+            position = int(action.targets[0].split("_")[1])
+            if 0 <= position < 3:
+                self.state.swap_player_with_center(player.name, position)
+                result = f"Swapped with center_{position}"
+                action.result = result
+                
+                # Log the swap
+                await self._log_card_swap(player.name, f"center_{position}")
+                
+        elif action.action_type == "werewolf_look":
+            # Lone werewolf looks at center
+            position = int(action.targets[0].split("_")[1])
+            if 0 <= position < 3:
+                result = self.state.center_cards[position].value
+                action.result = result
+                
+                agent.add_game_event(f"You looked at center card {position}: {result}")
+        
+        # Log the night action
+        self.event_log.log_event("NIGHT_ACTION", {
+            "player": player.name,
+            "role": role.value,
+            "action": action.action_type,
+            "targets": action.targets,
+            "result": result
+        })
+        
+        await self.broadcaster.broadcast(
+            GameEvent(
+                event_type=EventType.NIGHT_ACTION,
+                data={
+                    "player": player.name,
+                    "role": role.value,
+                    "action": action.action_type,
+                    "targets": action.targets,
+                    "result": result
+                }
             )
-            self.event_log.log_event("MAFIA_CHAT", msg)
+        )
         
-        async def set_kill_intention(sender: str, target: str) -> None:
-            """Callback when a mafia member sets their kill intention."""
-            kill_intentions[sender] = target
-            
-            # Add intention to messages so other mafia can see it
-            intention_msg = {
-                "type": "intention",
-                "sender": sender,
-                "target": target,
-                "timestamp": datetime.now().isoformat()
-            }
-            mafia_messages.append(intention_msg)
-            mafia_message_event.set()
-            mafia_message_event.clear()
-            
-            print(f"    [MAFIA INTENTION] {sender} → {target}")
-            self.logger.info(f"    MAFIA INTENTION: {sender} → {target}")
-            
-            # Broadcast intention to web viewers
-            await self.broadcaster.broadcast(
-                GameEvent(
-                    event_type=EventType.MAFIA_KILL_INTENTION,
-                    data={"player": sender, "target": target}
-                )
-            )
-            self.event_log.log_event("MAFIA_KILL_INTENTION", {"player": sender, "target": target})
-        
-        def get_mafia_messages() -> list[dict]:
-            return mafia_messages.copy()
-        
-        # Set up callbacks for each mafia member
-        mafia_names = [p.name for p in living_mafia]
-        for mafia in living_mafia:
-            self.agents[mafia.name].set_mafia_callbacks(
-                send_mafia_message, 
-                mafia_message_event,
-                set_kill_intention
-            )
-        phase_end_event = asyncio.Event()
-        
-        # Start all mafia discussion tasks
-        discussion_tasks = []
-        for mafia in living_mafia:
-            other_mafia = [n for n in mafia_names if n != mafia.name]
-            task = asyncio.create_task(
-                self.agents[mafia.name].run_mafia_discussion(
-                    living_names, other_mafia, get_mafia_messages, phase_end_event
-                )
-            )
-            discussion_tasks.append((mafia.name, task))
-        
-        # Wait for discussion, but check for early unanimous consensus
-        start_time = asyncio.get_event_loop().time()
-        check_interval = 2.0  # Check every 2 seconds
-        
-        while True:
-            elapsed = asyncio.get_event_loop().time() - start_time
-            if elapsed >= discussion_duration:
-                break
-            
-            # Check for unanimous consensus
-            if len(kill_intentions) == len(living_mafia):
-                # All mafia have stated intentions
-                targets = set(kill_intentions.values())
-                if len(targets) == 1:
-                    # Unanimous! End early
-                    print(f"    [MAFIA] Unanimous consensus reached early: {targets.pop()}")
-                    self.logger.info(f"  Mafia reached unanimous consensus early after {elapsed:.1f}s")
-                    break
-            
-            await asyncio.sleep(min(check_interval, discussion_duration - elapsed))
-        
-        phase_end_event.set()
-        mafia_message_event.set()  # Wake up any waiting mafia
-        
-        # Wait for tasks to finish gracefully
-        for name, task in discussion_tasks:
-            task.cancel()
-            try:
-                result = await task
-                # If task returned an intention, use it (fallback)
-                if result and name not in kill_intentions:
-                    kill_intentions[name] = result
-            except asyncio.CancelledError:
-                pass
-        
-        print(f"  --- MAFIA FINAL INTENTIONS: {kill_intentions} ---")
-        
-        # Use collected intentions to determine kill target
-        mafia_votes = list(kill_intentions.values())
-        
-        if mafia_votes:
-            vote_counts = Counter(mafia_votes)
-            max_votes = max(vote_counts.values())
-            top_voted = [target for target, count in vote_counts.items() if count == max_votes]
-            
-            if len(top_voted) == 1:
-                final_target = top_voted[0]
-                self.logger.info(f"  Mafia final target (votes: {dict(vote_counts)}): {final_target}")
-                return final_target
-            else:
-                # Tie - random selection
-                final_target = random.choice(top_voted)
-                self.logger.info(f"  Mafia vote tied (votes: {dict(vote_counts)}) - randomly selected: {final_target}")
-                return final_target
-        
-        return None
+        self.state.night_actions.append(action)
+        return action
     
-    async def _run_night_phase(self) -> NightResult:
-        """Run the night phase."""
+    async def _log_card_swap(self, location1: str, location2: str) -> None:
+        """Log a card swap event."""
+        # Build updated player info
+        updated_players = {}
+        for p in self.players:
+            updated_players[p.name] = {"current_role": p.current_role.value}
+        
+        self.event_log.log_event("CARD_SWAP", {
+            "location1": location1,
+            "location2": location2,
+            "updated_players": updated_players,
+            "center_cards": [r.value for r in self.state.center_cards]
+        })
+        
+        await self.broadcaster.broadcast(
+            GameEvent(
+                event_type=EventType.CARD_SWAP,
+                data={
+                    "location1": location1,
+                    "location2": location2,
+                    "updated_players": updated_players,
+                    "center_cards": [r.value for r in self.state.center_cards]
+                }
+            )
+        )
+    
+    async def _run_night_phase(self) -> None:
+        """Run the night phase with actions in order."""
         print(f"\n{'='*50}")
-        print(f"NIGHT {self.state.day_number}")
+        print(f"NIGHT PHASE")
         print(f"{'='*50}")
         
         self.state.phase = Phase.NIGHT
         self.state.phase_start_time = datetime.now()
-        self.state.current_night_actions.clear()
-        
-        # Update agents with phase info
-        self._update_agents_phase("NIGHT", self.state.day_number)
         
         # Broadcast phase change
         await self.broadcaster.broadcast(
             GameEvent(
                 event_type=EventType.PHASE_CHANGE,
-                data={"phase": "NIGHT", "day_number": self.state.day_number}
+                data={"phase": "NIGHT", "day_number": 1}
             )
         )
+        self.event_log.log_event("PHASE_CHANGE", {"phase": "NIGHT", "day_number": 1})
         
-        # Log for replay
-        self.event_log.log_event("PHASE_CHANGE", {"phase": "NIGHT", "day_number": self.state.day_number})
+        # Emit GM message with initial role assignments (God View)
+        role_assignments = "\n".join([f"  {p.name}: {p.original_role.value}" for p in self.players])
+        center_cards = ", ".join([r.value for r in self.state.center_cards])
+        await self._emit_gm_message(
+            f"Roles dealt:\n{role_assignments}\n  Center: [{center_cards}]"
+        )
         
-        living_names = [p.name for p in self.state.living_players]
-        self.logger.info(f"Night {self.state.day_number} - Living players: {living_names}")
+        await self._emit_gm_message("Everyone, close your eyes.")
         
-        doctor_target: Optional[str] = None
-        detective_target: Optional[str] = None
-        detective_result: Optional[bool] = None
-        
-        # 1. DETECTIVE phase
-        await self._emit_gm_message("Night falls over the town. Detective, open your eyes.")
-        
-        for player in self.state.living_players:
-            if player.role == Role.DETECTIVE:
-                target, reasoning = await self.agents[player.name].run_night_phase(living_names)
-                
-                # Validate target
-                if target and target not in living_names:
-                    self._track_error("INVALID_NIGHT_ACTION", {
-                        "player": player.name,
-                        "role": "DETECTIVE",
-                        "target": target,
-                        "valid_targets": living_names,
-                        "reason": "Target not alive"
-                    })
-                    target = None  # Invalidate the target
-                
-                detective_target = target
-                self.logger.info(f"  DETECTIVE {player.name} investigates: {target}")
-                
-                # Get investigation result immediately and tell the detective
-                if target:
-                    target_player = self.state.get_player_by_name(target)
-                    if target_player:
-                        detective_result = target_player.role == Role.MAFIA
-                        result_text = "IS MAFIA" if detective_result else "is NOT Mafia"
-                        
-                        # Add result to detective's chat history so it shows in their thoughts
-                        result_message = f"[INVESTIGATION RESULT] {target} {result_text}."
-                        self.agents[player.name].player.chat_history.append(
-                            ChatMessage(role="user", content=result_message)
-                        )
-                        self.agents[player.name].player.chat_history.append(
-                            ChatMessage(role="assistant", content=f"I now know that {target} {result_text}. I'll remember this for the day discussion.")
-                        )
-                        
-                        # Broadcast as a thought event
-                        await self.broadcaster.broadcast(
-                            GameEvent(
-                                event_type=EventType.PLAYER_THOUGHT,
-                                data={
-                                    "player_name": player.name,
-                                    "prompt": result_message,
-                                    "response": f"I now know that {target} {result_text}. I'll remember this for the day discussion.",
-                                    "tool_calls": None,
-                                    "phase": "NIGHT",
-                                    "day_number": self.state.day_number
-                                }
-                            ),
-                            channels=[f"player_{player.name}"]
-                        )
-                        self.event_log.log_event("PLAYER_THOUGHT", {
-                            "player_name": player.name,
-                            "prompt": result_message,
-                            "response": f"I now know that {target} {result_text}. I'll remember this for the day discussion.",
-                            "tool_calls": None,
-                            "phase": "NIGHT",
-                            "day_number": self.state.day_number
-                        })
-                
-                # Emit reasoning event
-                await self.broadcaster.broadcast(
-                    GameEvent(
-                        event_type=EventType.NIGHT_REASONING,
-                        data={
-                            "role": "DETECTIVE", 
-                            "player": player.name, 
-                            "target": target,
-                            "reasoning": reasoning,
-                            "result": f"{target} {'IS' if detective_result else 'is NOT'} Mafia" if target else None
-                        }
-                    )
-                )
-                self.event_log.log_event("NIGHT_REASONING", {
-                    "role": "DETECTIVE", 
-                    "player": player.name, 
-                    "target": target,
-                    "reasoning": reasoning,
-                    "result": f"{target} {'IS' if detective_result else 'is NOT'} Mafia" if target else None
-                })
-                break
-        
-        # 2. DOCTOR phase
-        await self._emit_gm_message("Detective, close your eyes. Doctor, open your eyes.")
-        
-        for player in self.state.living_players:
-            if player.role == Role.DOCTOR:
-                target, reasoning = await self.agents[player.name].run_night_phase(living_names)
-                
-                # Validate target
-                if target and target not in living_names:
-                    self._track_error("INVALID_NIGHT_ACTION", {
-                        "player": player.name,
-                        "role": "DOCTOR",
-                        "target": target,
-                        "valid_targets": living_names,
-                        "reason": "Target not alive"
-                    })
-                    target = None  # Invalidate the target
-                
-                doctor_target = target
-                self.logger.info(f"  DOCTOR {player.name} protects: {target}")
-                
-                # Emit reasoning event
-                await self.broadcaster.broadcast(
-                    GameEvent(
-                        event_type=EventType.NIGHT_REASONING,
-                        data={
-                            "role": "DOCTOR", 
-                            "player": player.name, 
-                            "target": target,
-                            "reasoning": reasoning
-                        }
-                    )
-                )
-                self.event_log.log_event("NIGHT_REASONING", {
-                    "role": "DOCTOR", 
-                    "player": player.name, 
-                    "target": target,
-                    "reasoning": reasoning
-                })
-                break
-        
-        # 3. MAFIA phase
-        await self._emit_gm_message("Doctor, close your eyes. Mafia, open your eyes.")
-        
-        # Run mafia coordination
-        mafia_target_name = await self._run_mafia_coordination(living_names)
-        
-        # 4. End of night
-        await self._emit_gm_message("Mafia, close your eyes. The sun rises over the town.")
-        
-        # Town members just wait (no action needed)
-        for player in self.state.living_players:
-            if player.role == Role.TOWN:
-                await self.agents[player.name].run_night_phase(living_names)
-        
-        # Resolve night actions
-        result = NightResult()
-        
-        # Mafia kill
-        if mafia_target_name:
-            result.kill_target = self.state.get_player_by_name(mafia_target_name)
-            self.logger.info(f"  Mafia final target: {mafia_target_name}")
-        
-        # Doctor protection
-        if doctor_target:
-            result.saved_player = self.state.get_player_by_name(doctor_target)
-            self.logger.info(f"  Doctor protected: {doctor_target}")
-        
-        # Determine if kill succeeds
-        if result.kill_target:
-            if result.saved_player and result.kill_target.name == result.saved_player.name:
-                # Doctor saved the target!
-                self.logger.info(f"  SAVE! Doctor saved {result.kill_target.name} from mafia!")
-                result.killed_player = None
+        # Execute night actions in order
+        for role in NIGHT_ACTION_ORDER:
+            # Find players with this original role
+            players_with_role = self.state.get_players_with_original_role(role)
+            
+            if not players_with_role:
+                continue
+            
+            # GM narration
+            role_name = role.value.title()
+            if len(players_with_role) > 1:
+                await self._emit_gm_message(f"{role_name}s, wake up.")
             else:
-                # Kill succeeds
-                result.killed_player = result.kill_target
-                result.killed_player.is_alive = False
-                self.logger.info(f"  DEATH! {result.killed_player.name} was killed by mafia")
-                
-                await self.broadcaster.broadcast(
-                    GameEvent(
-                        event_type=EventType.PLAYER_DEATH,
-                        data={
-                            "player": result.killed_player.name,
-                            "cause": "killed_by_mafia",
-                            "was_mafia": result.killed_player.role == Role.MAFIA
-                        }
-                    )
-                )
-                self.event_log.log_event("PLAYER_DEATH", {
-                    "player": result.killed_player.name,
-                    "cause": "killed_by_mafia",
-                    "was_mafia": result.killed_player.role == Role.MAFIA
-                })
+                await self._emit_gm_message(f"{role_name}, wake up.")
+            
+            print(f"\n  --- {role.value} PHASE ---")
+            self.logger.info(f"  {role.value} phase - {[p.name for p in players_with_role]}")
+            
+            # Execute each player's action
+            for player in players_with_role:
+                action = await self._execute_night_action(player)
+                if action:
+                    print(f"    {player.name}: {action.action_type} -> {action.targets} = {action.result}")
+            
+            # GM closes eyes
+            if len(players_with_role) > 1:
+                await self._emit_gm_message(f"{role_name}s, close your eyes.")
+            else:
+                await self._emit_gm_message(f"{role_name}, close your eyes.")
         
-        # Handle detective investigation
-        if detective_target:
-            target = self.state.get_player_by_name(detective_target)
-            if target:
-                is_mafia = target.role == Role.MAFIA
-                result.investigation_result = (target, is_mafia)
-                result_text = "IS MAFIA" if is_mafia else "is NOT mafia"
-                self.logger.info(f"  Investigation result: {target.name} {result_text}")
-                
-                # Tell the detective the result
-                for player in self.state.living_players:
-                    if player.role == Role.DETECTIVE:
-                        self.agents[player.name].add_game_event(
-                            f"Your investigation reveals: {target.name} {result_text}."
-                        )
+        await self._emit_gm_message("Everyone, wake up!")
         
-        # Store result
-        self.state.night_results.append(result)
-        
-        # Emit GM message for night result (sun rise already announced above)
-        if result.killed_player:
-            alignment = "Mafia" if result.killed_player.role == Role.MAFIA else "not Mafia"
-            await self._emit_gm_message(f"{result.killed_player.name} was found dead. They were {alignment}.")
-        elif result.kill_target and result.saved_player and result.kill_target.name == result.saved_player.name:
-            await self._emit_gm_message("The doctor saved someone during the night. No one died.")
-        else:
-            await self._emit_gm_message("The night passes peacefully. No one died.")
-        
-        # Broadcast night result
-        await self.broadcaster.broadcast(
-            GameEvent(
-                event_type=EventType.NIGHT_RESULT,
-                data={
-                    "killed": result.killed_player.name if result.killed_player else None,
-                    "saved": result.kill_target.name if result.kill_target and result.kill_target == result.saved_player else None
-                }
-            )
-        )
-        
-        return result
+        # Log final state after all swaps
+        print(f"\n  --- FINAL ROLES AFTER NIGHT ---")
+        for p in self.players:
+            changed = " (CHANGED)" if p.current_role != p.original_role else ""
+            print(f"    {p.name}: {p.original_role.value} -> {p.current_role.value}{changed}")
     
-    async def _run_day_phase(self, night_result: NightResult) -> None:
+    async def _run_day_phase(self) -> None:
         """Run the day discussion phase."""
         print(f"\n{'='*50}")
-        print(f"DAY {self.state.day_number} - Discussion ({self.day_duration_seconds} seconds)")
+        print(f"DAY PHASE - Discussion ({self.day_duration_seconds} seconds)")
         print(f"{'='*50}")
         
         self.state.phase = Phase.DAY
@@ -945,8 +657,9 @@ class MafiaGame:
         self.state.phase_end_time = datetime.now() + timedelta(seconds=self.day_duration_seconds)
         self._phase_end_event.clear()
         
-        # Update agents with phase info
-        self._update_agents_phase("DAY", self.state.day_number)
+        # Update agents
+        for agent in self.agents.values():
+            agent.set_phase("DAY")
         
         # Broadcast phase change
         await self.broadcaster.broadcast(
@@ -954,56 +667,41 @@ class MafiaGame:
                 event_type=EventType.PHASE_CHANGE,
                 data={
                     "phase": "DAY", 
-                    "day_number": self.state.day_number,
+                    "day_number": 1,
                     "duration_seconds": self.day_duration_seconds
                 }
             )
         )
-        self.event_log.log_event("PHASE_CHANGE", {"phase": "DAY", "day_number": self.state.day_number})
+        self.event_log.log_event("PHASE_CHANGE", {"phase": "DAY", "day_number": 1})
         
-        # Announce night results to all players
-        if night_result.killed_player:
-            alignment = "Mafia" if night_result.killed_player.role == Role.MAFIA else "not Mafia"
-            announcement = f"{night_result.killed_player.name} was killed during the night. They were {alignment}."
-        else:
-            announcement = "Nobody was killed during the night."
+        await self._emit_gm_message(
+            f"The sun rises. You have {self.day_duration_seconds // 60} minutes to discuss before voting."
+        )
         
-        for agent in self.agents.values():
-            if agent.player.is_alive:
-                agent.add_game_event(announcement)
+        player_names = [p.name for p in self.players]
         
-        print(f"\n{announcement}\n")
-        
-        living_names = [p.name for p in self.state.living_players]
-        
-        # Start all living players' day phase coroutines
-        # Get previous day's votes (if any) to show players
-        previous_votes: Optional[dict[str, str]] = None
-        if self.state.vote_results:
-            previous_votes = self.state.vote_results[-1].votes.copy()
-        
+        # Start all players' day phase
         player_tasks = []
-        for player in self.state.living_players:
+        for player in self.players:
             task = asyncio.create_task(
                 self.agents[player.name].run_day_phase(
-                    living_names,
+                    player_names,
                     self._get_messages,
                     self._phase_end_event,
-                    previous_votes=previous_votes,
                     phase_start_time=self.state.phase_start_time,
                     phase_duration_seconds=self.day_duration_seconds,
                 )
             )
             player_tasks.append(task)
         
-        # Wait for the day phase duration
+        # Wait for day phase duration
         await asyncio.sleep(self.day_duration_seconds)
         
-        # Signal end of day phase
+        # Signal end
         self._phase_end_event.set()
-        self._new_message_event.set()  # Wake up any waiting players
+        self._new_message_event.set()
         
-        # Wait for all player tasks to finish
+        # Wait for tasks to finish
         for task in player_tasks:
             task.cancel()
             try:
@@ -1023,61 +721,49 @@ class MafiaGame:
         self.state.phase_start_time = datetime.now()
         self.state.current_votes.clear()
         
-        # Update agents with phase info
-        self._update_agents_phase("VOTING", self.state.day_number)
+        # Update agents
+        for agent in self.agents.values():
+            agent.set_phase("VOTING")
         
         # Broadcast phase change
         await self.broadcaster.broadcast(
             GameEvent(
                 event_type=EventType.PHASE_CHANGE,
-                data={"phase": "VOTING", "day_number": self.state.day_number}
+                data={"phase": "VOTING", "day_number": 1}
             )
         )
-        self.event_log.log_event("PHASE_CHANGE", {"phase": "VOTING", "day_number": self.state.day_number})
+        self.event_log.log_event("PHASE_CHANGE", {"phase": "VOTING", "day_number": 1})
         
-        # Announce voting phase to all players
-        for agent in self.agents.values():
-            if agent.player.is_alive:
-                agent.add_game_event("It is now time to vote. Choose a player to lynch.")
+        await self._emit_gm_message("Time to vote! Point at who you think is a Werewolf.")
         
-        living_names = [p.name for p in self.state.living_players]
+        player_names = [p.name for p in self.players]
+        valid_targets = set(player_names + ["no_one"])
         
-        # Emit GM message for voting
-        await self._emit_gm_message("The town gathers to vote. Each player will cast their vote.")
-        
-        # Valid vote targets: living players + "no_lynch"
-        valid_targets = set(living_names + ["no_lynch"])
-        
-        # Collect votes from all living players in parallel (self-votes are allowed)
+        # Collect votes in parallel
         votes: dict[str, str] = {}
         vote_reasonings: dict[str, str] = {}
-        invalid_votes: list[dict] = []
         
-        # Create voting tasks for all living players
         async def get_player_vote(player: Player) -> tuple[str, Optional[str], Optional[str]]:
-            """Get a player's vote. Returns (player_name, vote, reasoning)."""
-            vote, reasoning = await self.agents[player.name].run_voting_phase(living_names, self.state.public_messages)
+            vote, reasoning = await self.agents[player.name].run_voting_phase(player_names, self.state.public_messages)
             return player.name, vote, reasoning
         
-        voting_tasks = [get_player_vote(player) for player in self.state.living_players]
+        voting_tasks = [get_player_vote(player) for player in self.players]
         results = await asyncio.gather(*voting_tasks)
         
-        # Process results
         for player_name, vote, reasoning in results:
-            # Normalize vote (case-insensitive no_lynch)
-            normalized_vote = vote.lower() if vote and vote.lower() == "no_lynch" else vote
-            if normalized_vote and normalized_vote.lower() == "no_lynch":
-                normalized_vote = "no_lynch"
+            # Normalize vote
+            normalized_vote = vote
+            if vote and vote.lower() == "no_one":
+                normalized_vote = "no_one"
             
             if normalized_vote and normalized_vote in valid_targets:
                 votes[player_name] = normalized_vote
                 vote_reasonings[player_name] = reasoning or ""
                 self.state.current_votes[player_name] = normalized_vote
                 
-                # Emit vote with reasoning
                 await self.broadcaster.broadcast(
                     GameEvent(
-                        event_type=EventType.VOTE_REASONING,
+                        event_type=EventType.VOTE_CAST,
                         data={
                             "voter": player_name, 
                             "target": normalized_vote,
@@ -1091,123 +777,48 @@ class MafiaGame:
                     "reasoning": reasoning
                 })
             else:
-                # Track invalid votes for debugging
-                invalid_votes.append({
-                    "voter": player_name,
-                    "attempted_target": vote,
-                    "reason": "Target not in valid options"
-                })
-                self.logger.warning(f"Invalid vote from {player_name}: '{vote}' (not in {valid_targets})")
-                self.event_log.log_event("INVALID_VOTE", {
-                    "voter": player_name,
-                    "attempted_target": vote,
-                    "valid_options": list(valid_targets)
-                })
+                self.logger.warning(f"Invalid vote from {player_name}: '{vote}'")
         
-        # Tally votes - require strict majority to lynch
-        vote_counts = Counter(votes.values())
-        result = VoteResult(votes=votes)
-        num_voters = len(self.state.living_players)
-        majority_threshold = (num_voters // 2) + 1  # Strict majority
+        # Determine winner using the ONUW rules
+        winner, killed_players = determine_winner(self.state)
         
-        if vote_counts:
-            max_votes = max(vote_counts.values())
-            top_voted = [name for name, count in vote_counts.items() if count == max_votes]
-            
-            # Check if we have a strict majority
-            if max_votes >= majority_threshold and len(top_voted) == 1:
-                lynched_name = top_voted[0]
-                
-                # Check if "no_lynch" won
-                if lynched_name == "no_lynch":
-                    # No lynch - town voted to skip
-                    self.logger.info(f"Town voted to skip lynching ({max_votes}/{num_voters} votes)")
-                else:
-                    # Clear winner with majority - lynch them
-                    lynched_player = self.state.get_player_by_name(lynched_name)
-                    if lynched_player:
-                        result.lynched_player = lynched_player
-                        lynched_player.is_alive = False
-                        
-                        await self.broadcaster.broadcast(
-                            GameEvent(
-                                event_type=EventType.PLAYER_DEATH,
-                                data={
-                                    "player": lynched_player.name,
-                                    "cause": "lynched",
-                                    "was_mafia": lynched_player.role == Role.MAFIA
-                                }
-                            )
-                        )
-                        self.event_log.log_event("PLAYER_DEATH", {
-                            "player": lynched_player.name,
-                            "cause": "lynched",
-                            "was_mafia": lynched_player.role == Role.MAFIA
-                        })
-            else:
-                # No majority or tie - no lynch
-                result.was_tie = len(top_voted) > 1
-                if max_votes < majority_threshold:
-                    self.logger.info(f"No majority reached ({max_votes}/{num_voters}, need {majority_threshold}). No lynch.")
+        result = VoteResult(
+            votes=votes,
+            killed_players=killed_players
+        )
+        self.state.vote_result = result
         
-        # Store result
-        self.state.vote_results.append(result)
-        
-        # Broadcast vote result
+        # Broadcast result
         await self.broadcaster.broadcast(
             GameEvent(
                 event_type=EventType.VOTE_RESULT,
                 data={
                     "votes": votes,
-                    "lynched": result.lynched_player.name if result.lynched_player else None,
-                    "was_tie": result.was_tie,
-                    "lynched_was_mafia": result.lynched_player.role == Role.MAFIA if result.lynched_player else None
+                    "killed": killed_players,
                 }
             )
         )
-        
-        # Announce result via GM message and to players
-        if result.lynched_player:
-            alignment = "Mafia" if result.lynched_player.role == Role.MAFIA else "not Mafia"
-            announcement = f"{result.lynched_player.name} was lynched. They were {alignment}."
-        elif result.was_tie:
-            announcement = "The vote was tied. Nobody was lynched."
-        elif votes and vote_counts.get("no_lynch", 0) > 0:
-            # Check if no_lynch had votes but didn't reach majority
-            no_lynch_votes = vote_counts.get("no_lynch", 0)
-            announcement = f"No majority reached. {no_lynch_votes} voted no_lynch. Nobody was lynched."
-        else:
-            announcement = "No majority reached. Nobody was lynched."
-        
-        await self._emit_gm_message(f"The votes are tallied. {announcement}")
-        
-        # Log voting results
-        self.logger.info(f"Voting results: {votes}")
         self.event_log.log_event("VOTE_RESULT", {
             "votes": votes,
-            "lynched": result.lynched_player.name if result.lynched_player else None,
-            "was_tie": result.was_tie
+            "killed": killed_players,
         })
-        if result.lynched_player:
-            self.logger.info(f"  LYNCHED: {result.lynched_player.name} ({result.lynched_player.role.value})")
-        elif result.was_tie:
-            self.logger.info("  TIE - no lynch")
+        
+        # Announce results
+        print(f"\nVotes: {votes}")
+        if killed_players:
+            print(f"Killed: {killed_players}")
+            killed_str = ", ".join(killed_players)
+            await self._emit_gm_message(f"The village points... {killed_str} {'is' if len(killed_players) == 1 else 'are'} killed!")
         else:
-            self.logger.info("  NO VALID VOTES - no lynch")
-        
-        print(f"\n{announcement}")
-        print(f"Votes: {votes}")
-        
-        for agent in self.agents.values():
-            if agent.player.is_alive:
-                agent.add_game_event(announcement)
+            print("No one was killed")
+            await self._emit_gm_message("The village points... but no one has enough votes. No one dies!")
         
         return result
     
     async def run_game(self) -> str:
-        """Run the full game until someone wins."""
+        """Run the full game."""
         print(f"\n{'#'*60}")
-        print(f"GAME START")
+        print(f"ONE NIGHT ULTIMATE WEREWOLF")
         print(f"{'#'*60}")
         
         # Broadcast game start
@@ -1216,59 +827,27 @@ class MafiaGame:
                 event_type=EventType.GAME_START,
                 data={
                     "players": [
-                        {"name": p.name, "is_alive": p.is_alive}
+                        {"name": p.name, "original_role": p.original_role.value}
                         for p in self.players
-                    ]
+                    ],
+                    "center_cards": [r.value for r in self.state.center_cards]
                 }
             )
         )
         
-        # Tell mafia who their partners are
-        mafia_members = [p for p in self.players if p.role == Role.MAFIA]
-        if len(mafia_members) > 1:
-            mafia_names = [p.name for p in mafia_members]
-            for player in mafia_members:
-                other_mafia = [n for n in mafia_names if n != player.name]
-                self.agents[player.name].add_game_event(
-                    f"Your fellow mafia member(s): {', '.join(other_mafia)}"
-                )
+        # Night phase
+        await self._run_night_phase()
         
-        turn_count = 0
-        while True:
-            turn_count += 1
-            self.logger.info(f"=== TURN {turn_count} (Day {self.state.day_number}) ===")
-            
-            # Night phase
-            night_result = await self._run_night_phase()
-            
-            # Check win condition after night
-            winner = self._check_win_condition()
-            if winner:
-                break
-            
-            # Day phase
-            await self._run_day_phase(night_result)
-            
-            # Voting phase
-            await self._run_voting_phase()
-            
-            # Check win condition after voting
-            winner = self._check_win_condition()
-            if winner:
-                break
-            
-            # Check turn limit
-            if self.turn_limit and turn_count >= self.turn_limit:
-                self.logger.info(f"Turn limit ({self.turn_limit}) reached, stopping game")
-                winner = "TURN_LIMIT"
-                break
-            
-            # Increment day counter
-            self.state.day_number += 1
+        # Day phase
+        await self._run_day_phase()
         
-        # Game over
+        # Voting phase
+        await self._run_voting_phase()
+        
+        # Determine winner
+        winner, killed = determine_winner(self.state)
+        self.state.winner = winner
         self.state.phase = Phase.GAME_OVER
-        self.state.winner = winner  # type: ignore
         
         print(f"\n{'#'*60}")
         print(f"GAME OVER - {winner} WINS!")
@@ -1277,8 +856,26 @@ class MafiaGame:
         # Reveal all roles
         print("\nFinal roles:")
         for p in self.players:
-            status = "alive" if p.is_alive else "dead"
-            print(f"  - {p.name}: {p.role.value} ({status})")
+            changed = f" (was {p.original_role.value})" if p.current_role != p.original_role else ""
+            status = "KILLED" if p.name in killed else "alive"
+            print(f"  - {p.name}: {p.current_role.value}{changed} [{status}]")
+        print(f"Center: {[r.value for r in self.state.center_cards]}")
+        
+        # Explain win condition
+        print(f"\nWin explanation:")
+        werewolves = [p.name for p in self.players if p.current_role == Role.WEREWOLF]
+        if werewolves:
+            print(f"  Werewolf players: {werewolves}")
+            if any(p.current_role == Role.WEREWOLF for p in self.players if p.name in killed):
+                print(f"  A werewolf was killed -> VILLAGE wins!")
+            else:
+                print(f"  No werewolf was killed -> WEREWOLF wins!")
+        else:
+            print(f"  No werewolves among players (all in center)")
+            if killed:
+                print(f"  Someone was killed -> WEREWOLF team wins!")
+            else:
+                print(f"  No one was killed -> VILLAGE wins!")
         
         await self.broadcaster.broadcast(
             GameEvent(
@@ -1286,48 +883,35 @@ class MafiaGame:
                 data={
                     "winner": winner,
                     "players": [
-                        {"name": p.name, "role": p.role.value, "is_alive": p.is_alive}
+                        {"name": p.name, "original_role": p.original_role.value, "current_role": p.current_role.value}
                         for p in self.players
-                    ]
+                    ],
+                    "center_cards": [r.value for r in self.state.center_cards],
+                    "killed": killed
                 }
             )
         )
         
-        # Log game end for replay
         self.event_log.log_event("GAME_END", {
             "winner": winner,
             "players": [
-                {"name": p.name, "role": p.role.value, "is_alive": p.is_alive}
+                {"name": p.name, "original_role": p.original_role.value, "current_role": p.current_role.value}
                 for p in self.players
             ],
+            "center_cards": [r.value for r in self.state.center_cards],
+            "killed": killed,
             "errors": self.errors
         })
         self.event_log.close()
         
-        # Print error summary
         if self.errors:
-            print(f"\n⚠️ ERRORS ENCOUNTERED ({len(self.errors)} total):")
-            by_type: dict[str, int] = {}
-            for err in self.errors:
-                err_type = err.get("type", "UNKNOWN")
-                by_type[err_type] = by_type.get(err_type, 0) + 1
-            for err_type, count in sorted(by_type.items()):
-                print(f"   {err_type}: {count}")
+            print(f"\n⚠️ ERRORS ENCOUNTERED ({len(self.errors)} total)")
         
         return winner
     
-    def get_player_thoughts(self, player_name: str) -> list[ChatMessage]:
-        """Get a player's full chat history (for web viewer)."""
-        if player_name in self.agents:
-            return self.agents[player_name].player.chat_history
-        return []
-    
     def get_game_state_dict(self) -> dict:
         """Get the current game state as a dictionary (for web viewer)."""
-        # Get event history from broadcaster
         event_history = self.broadcaster.get_history()
-        
-        # Build phase history with actual events
         phase_history = []
         current_phase = None
         
@@ -1337,14 +921,14 @@ class MafiaGame:
             data = event_dict.get("data", {})
             
             if event_type == "PHASE_CHANGE":
-                # Start a new phase
                 current_phase = {
                     "phase": data.get("phase"),
-                    "dayNumber": data.get("day_number"),
+                    "dayNumber": 1,
                     "players": [
-                        {"name": p.name, "role": p.role.value, "is_alive": p.is_alive}
+                        {"name": p.name, "original_role": p.original_role.value, "current_role": p.current_role.value}
                         for p in self.players
                     ],
+                    "centerCards": [r.value for r in self.state.center_cards],
                     "events": [],
                     "messages": [],
                     "votes": {},
@@ -1353,55 +937,52 @@ class MafiaGame:
                 phase_history.append(current_phase)
             
             elif current_phase is not None:
-                # Add event to current phase
-                # Note: spread data first, then set type to avoid data['type'] overwriting
                 if event_type == "GM_MESSAGE":
                     current_phase["events"].append({**data, "type": "gm_message"})
-                elif event_type == "NIGHT_REASONING":
-                    current_phase["events"].append({**data, "type": "night_reasoning"})
-                elif event_type == "MAFIA_CHAT":
-                    current_phase["events"].append({**data, "type": "mafia_chat"})
-                elif event_type == "MAFIA_KILL_INTENTION":
-                    current_phase["events"].append({**data, "type": "kill_intention"})
+                    current_phase["gmMessages"].append(data)
+                elif event_type == "NIGHT_ACTION":
+                    current_phase["events"].append({**data, "type": "night_action"})
+                elif event_type == "CARD_SWAP":
+                    current_phase["events"].append({**data, "type": "card_swap"})
+                    # Update player roles in phase
+                    current_phase["players"] = [
+                        {"name": p.name, "original_role": p.original_role.value, "current_role": p.current_role.value}
+                        for p in self.players
+                    ]
                 elif event_type == "PUBLIC_MESSAGE":
                     msg = {**data, "type": "message"}
                     current_phase["events"].append(msg)
                     current_phase["messages"].append(msg)
-                elif event_type == "VOTE_REASONING":
+                elif event_type == "VOTE_CAST":
                     current_phase["events"].append({**data, "type": "vote"})
                     current_phase["votes"][data.get("voter")] = data
-                elif event_type == "PLAYER_DEATH":
-                    current_phase["events"].append({**data, "type": "death"})
-                elif event_type == "NIGHT_RESULT":
-                    current_phase["events"].append({**data, "type": "night_result"})
                 elif event_type == "VOTE_RESULT":
                     current_phase["events"].append({**data, "type": "vote_result"})
         
-        # If no phases from events, create one for current state
         if not phase_history:
             phase_history.append({
                 "phase": self.state.phase.value,
-                "dayNumber": self.state.day_number,
+                "dayNumber": 1,
                 "players": [
-                    {"name": p.name, "role": p.role.value, "is_alive": p.is_alive}
+                    {"name": p.name, "original_role": p.original_role.value, "current_role": p.current_role.value}
                     for p in self.players
                 ],
+                "centerCards": [r.value for r in self.state.center_cards],
                 "events": [],
                 "messages": [],
                 "votes": {},
                 "gmMessages": []
             })
         
-        # Build player thoughts grouped by phase from PLAYER_THOUGHT events
-        player_thoughts: dict[str, dict[str, list]] = {}  # {player_name: {phase_key: [thoughts]}}
+        # Build player thoughts
+        player_thoughts: dict[str, dict[str, list]] = {}
         for event in event_history:
             event_dict = event.to_dict()
             if event_dict.get("event_type") == "PLAYER_THOUGHT":
                 data = event_dict.get("data", {})
                 player_name = data.get("player_name")
                 phase = data.get("phase", "UNKNOWN")
-                day = data.get("day_number", 1)
-                phase_key = f"{day}_{phase}"
+                phase_key = f"1_{phase}"
                 
                 if player_name not in player_thoughts:
                     player_thoughts[player_name] = {}
@@ -1420,16 +1001,12 @@ class MafiaGame:
         
         return {
             "phase": self.state.phase.value,
-            "day_number": self.state.day_number,
+            "day_number": 1,
             "players": [
-                {"name": p.name, "role": p.role.value, "is_alive": p.is_alive}
+                {"name": p.name, "original_role": p.original_role.value, "current_role": p.current_role.value}
                 for p in self.players
             ],
-            "living_players": [p.name for p in self.state.living_players],
-            "dead_players": [
-                {"name": p.name, "role": p.role.value}
-                for p in self.state.dead_players
-            ],
+            "center_cards": [r.value for r in self.state.center_cards],
             "messages": [
                 {
                     "id": m.id,

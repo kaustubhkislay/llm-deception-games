@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 from openai import AsyncOpenAI
 
-from .mafia import ChatMessage
+from .onuw import ChatMessage
 
 
 # Cache directory
@@ -293,17 +293,22 @@ VOTE_TOOL = {
     }
 }
 
-NIGHT_ACTION_TOOL = {
+# ============================================================================
+# ONUW Night Action Tools
+# ============================================================================
+
+# Seer tools - can look at one player OR two center cards
+SEER_LOOK_PLAYER_TOOL = {
     "type": "function",
     "function": {
-        "name": "night_action",
-        "description": "Perform your night action. For Mafia: choose someone to kill. For Doctor: choose someone to save. For Detective: choose someone to investigate.",
+        "name": "look_at_player",
+        "description": "Look at another player's card to see their current role.",
         "parameters": {
             "type": "object",
             "properties": {
                 "target": {
                     "type": "string",
-                    "description": "The name of the player to target with your night action"
+                    "description": "The name of the player whose card you want to look at"
                 }
             },
             "required": ["target"]
@@ -311,52 +316,122 @@ NIGHT_ACTION_TOOL = {
     }
 }
 
-# Mafia coordination tools
-MAFIA_DRAFT_MESSAGE_TOOL = {
+SEER_LOOK_CENTER_TOOL = {
     "type": "function",
     "function": {
-        "name": "mafia_draft_message",
-        "description": "Prepare a private message to your fellow mafia. This does NOT send it yet - you'll see any new messages, then can send or revise.",
+        "name": "look_at_center",
+        "description": "Look at two center cards to see what roles are NOT in play with players.",
         "parameters": {
             "type": "object",
             "properties": {
-                "content": {
-                    "type": "string",
-                    "description": "The message text to draft"
+                "position1": {
+                    "type": "integer",
+                    "description": "First center card position (0, 1, or 2)",
+                    "enum": [0, 1, 2]
+                },
+                "position2": {
+                    "type": "integer",
+                    "description": "Second center card position (0, 1, or 2), must be different from position1",
+                    "enum": [0, 1, 2]
                 }
             },
-            "required": ["content"]
+            "required": ["position1", "position2"]
         }
     }
 }
 
-MAFIA_SEND_MESSAGE_TOOL = {
+# Robber tool - swap with another player and see new card
+ROBBER_TOOL = {
     "type": "function",
     "function": {
-        "name": "mafia_send_message",
-        "description": "Send your drafted message to your fellow mafia members. You must draft a message first using mafia_draft_message.",
+        "name": "rob_player",
+        "description": "Swap your card with another player's card, then see your new role.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": "The name of the player whose card you want to steal"
+                }
+            },
+            "required": ["target"]
+        }
+    }
+}
+
+# Troublemaker tool - swap two other players' cards
+TROUBLEMAKER_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "swap_players",
+        "description": "Swap the cards of two other players. You will NOT see their cards.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "player1": {
+                    "type": "string",
+                    "description": "First player to swap"
+                },
+                "player2": {
+                    "type": "string",
+                    "description": "Second player to swap"
+                }
+            },
+            "required": ["player1", "player2"]
+        }
+    }
+}
+
+# Drunk tool - swap with center (blind)
+DRUNK_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "drunk_swap",
+        "description": "Swap your card with one of the center cards. You will NOT see your new card.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "position": {
+                    "type": "integer",
+                    "description": "Center card position to swap with (0, 1, or 2)",
+                    "enum": [0, 1, 2]
+                }
+            },
+            "required": ["position"]
+        }
+    }
+}
+
+# Werewolf tool - look at center if alone
+WEREWOLF_LOOK_CENTER_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "werewolf_look_center",
+        "description": "Look at one center card. Only available if you are the only werewolf.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "position": {
+                    "type": "integer",
+                    "description": "Center card position to look at (0, 1, or 2)",
+                    "enum": [0, 1, 2]
+                }
+            },
+            "required": ["position"]
+        }
+    }
+}
+
+# Acknowledge tool - for roles that just receive info (Werewolf seeing teammates, Minion, Insomniac)
+ACKNOWLEDGE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "acknowledge",
+        "description": "Acknowledge the information you received and end your night action.",
         "parameters": {
             "type": "object",
             "properties": {},
             "required": []
-        }
-    }
-}
-
-MAFIA_VOTE_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "mafia_kill_vote",
-        "description": "Vote for which player the mafia should kill tonight. You and your fellow mafia members must coordinate on a single target.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "target": {
-                    "type": "string",
-                    "description": "The name of the player you want the mafia to kill"
-                }
-            },
-            "required": ["target"]
         }
     }
 }
@@ -367,13 +442,33 @@ DAY_TOOLS = [DRAFT_MESSAGE_TOOL, SEND_MESSAGE_TOOL, WAIT_FOR_MESSAGES_TOOL]
 # Voting phase tools
 VOTING_TOOLS = [VOTE_TOOL]
 
-# Night phase tools (for doctor/detective)
-NIGHT_TOOLS = [NIGHT_ACTION_TOOL]
+# ============================================================================
+# ONUW Night Phase Tool Collections
+# ============================================================================
 
-# Mafia coordination tools
-# Mafia discussion includes ability to set kill intention (can be changed during discussion)
-MAFIA_DISCUSSION_TOOLS = [MAFIA_DRAFT_MESSAGE_TOOL, MAFIA_SEND_MESSAGE_TOOL, MAFIA_VOTE_TOOL, WAIT_FOR_MESSAGES_TOOL]
-MAFIA_VOTE_TOOLS = [MAFIA_VOTE_TOOL]
+# Seer can choose between looking at a player or center
+SEER_TOOLS = [SEER_LOOK_PLAYER_TOOL, SEER_LOOK_CENTER_TOOL]
+
+# Robber steals another player's card
+ROBBER_TOOLS = [ROBBER_TOOL]
+
+# Troublemaker swaps two other players
+TROUBLEMAKER_TOOLS = [TROUBLEMAKER_TOOL]
+
+# Drunk swaps with center (blind)
+DRUNK_TOOLS = [DRUNK_TOOL]
+
+# Werewolf (alone) can look at center
+WEREWOLF_LONE_TOOLS = [WEREWOLF_LOOK_CENTER_TOOL, ACKNOWLEDGE_TOOL]
+
+# Werewolf (with partner) just acknowledges
+WEREWOLF_TEAM_TOOLS = [ACKNOWLEDGE_TOOL]
+
+# Minion just acknowledges seeing werewolves
+MINION_TOOLS = [ACKNOWLEDGE_TOOL]
+
+# Insomniac just acknowledges seeing their card
+INSOMNIAC_TOOLS = [ACKNOWLEDGE_TOOL]
 
 
 def get_llm_client(use_cache: bool = True) -> CachedLLMClient:

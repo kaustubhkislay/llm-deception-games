@@ -1,6 +1,6 @@
-"""Infrastructure for LLM Mafia game."""
+"""Infrastructure for One Night Ultimate Werewolf game."""
 
-from .mafia import (
+from .onuw import (
     Role,
     Phase,
     Player,
@@ -10,10 +10,14 @@ from .mafia import (
     GameEvent,
     EventType,
     DEFAULT_PLAYER_NAMES,
-    DEFAULT_ROLE_DISTRIBUTION,
+    DEFAULT_ROLE_POOL,
+    NIGHT_ACTION_ORDER,
+    select_roles_for_game,
+    determine_winner,
+    get_team,
 )
 
-from .game_engine import MafiaGame, load_game_from_log
+from .game_engine import ONUWGame, load_game_from_log
 from .llm_client import get_llm_client, CachedLLMClient
 from .player import PlayerAgent
 from .events import get_broadcaster, EventBroadcaster
@@ -28,8 +32,12 @@ __all__ = [
     "GameEvent",
     "EventType",
     "DEFAULT_PLAYER_NAMES",
-    "DEFAULT_ROLE_DISTRIBUTION",
-    "MafiaGame",
+    "DEFAULT_ROLE_POOL",
+    "NIGHT_ACTION_ORDER",
+    "select_roles_for_game",
+    "determine_winner",
+    "get_team",
+    "ONUWGame",
     "load_game_from_log",
     "get_llm_client",
     "CachedLLMClient",
