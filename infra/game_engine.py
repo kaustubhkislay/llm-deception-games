@@ -73,6 +73,7 @@ def load_game_from_log(log_path: str) -> dict:
     all_votes: dict[str, dict] = {}
     phase = "GAME_OVER"
     winner: Optional[str] = None
+    killed_players: list[str] = []
     game_name: Optional[str] = None
     game_id: Optional[str] = None
     phase_history: list[dict] = []
@@ -257,6 +258,7 @@ def load_game_from_log(log_path: str) -> dict:
             
             elif event_type == "GAME_END":
                 winner = data.get("winner")
+                killed_players = data.get("killed", [])
                 for p in data.get("players", []):
                     if p["name"] in players:
                         players[p["name"]]["current_role"] = p["current_role"]
@@ -279,6 +281,7 @@ def load_game_from_log(log_path: str) -> dict:
         "messages": all_messages,
         "current_votes": {k: v.get("target") for k, v in all_votes.items()},
         "winner": winner,
+        "killed": killed_players,
         "phase_history": phase_history,
         "player_thoughts": player_thoughts,
     }
@@ -1124,6 +1127,11 @@ class ONUWGame:
                     "tool_calls": data.get("tool_calls")
                 })
         
+        # Get killed players from vote result
+        killed = []
+        if self.state.vote_result:
+            killed = self.state.vote_result.killed_players
+        
         return {
             "phase": self.state.phase.value,
             "day_number": 1,
@@ -1143,6 +1151,7 @@ class ONUWGame:
             ],
             "current_votes": self.state.current_votes,
             "winner": self.state.winner,
+            "killed": killed,
             "phase_history": phase_history,
             "player_thoughts": player_thoughts,
         }
