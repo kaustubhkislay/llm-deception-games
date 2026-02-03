@@ -16,7 +16,7 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from infra.game_engine import ONUWGame
-from infra.onuw import Role, DEFAULT_ROLE_POOL
+from infra.onuw import Role, DEFAULT_ROLE_POOL, DEFAULT_PLAYER_NAMES, GameConfig
 
 # Set up file logging for errors
 LOG_DIR = Path(__file__).parent.parent / "logs"
@@ -103,24 +103,34 @@ async def run_single_game(
     num_players: int,
     semaphore: asyncio.Semaphore,
     batch_name: str | None = None,
+    base_seed: int = 0,
 ) -> GameResult:
     """Run a single ONUW game."""
     async with semaphore:
         start_time = datetime.now()
         
         # Create player names
-        player_names = ["Alice", "Bob", "Charlie", "Diana", "Edward", "Fiona", "George"][:num_players]
+        player_names = DEFAULT_PLAYER_NAMES[:num_players]
+        
+        # Use base_seed + game_id for unique but reproducible seeds
+        seed = base_seed + game_id
+        
+        # Create config - need exactly num_players + 3 roles
+        num_roles_needed = num_players + 3
+        role_pool = DEFAULT_ROLE_POOL[:num_roles_needed]
+        
+        config = GameConfig(
+            seed=seed,
+            models=[model] * num_players,
+            roles=role_pool,
+            names=player_names,
+            num_rounds=num_rounds,
+        )
         
         # Generate game name if batch_name provided
         game_name = f"{batch_name} #{game_id}" if batch_name else None
         
-        game = ONUWGame(
-            player_names=player_names,
-            role_pool=DEFAULT_ROLE_POOL,
-            model=model,
-            num_rounds=num_rounds,
-            name=game_name,
-        )
+        game = ONUWGame(config=config, name=game_name)
         
         print(f"  🎮 Game {game_id} started...")
         
@@ -190,6 +200,7 @@ async def run_batch(
     num_rounds: int,
     num_players: int,
     batch_name: str | None = None,
+    base_seed: int = 0,
 ) -> BatchResults:
     """Run multiple games with controlled parallelism."""
     
@@ -198,13 +209,14 @@ async def run_batch(
     if batch_name:
         print(f"Batch name: {batch_name}")
     print(f"Model: {model} | Players: {num_players} | Rounds: {num_rounds}")
+    print(f"Base seed: {base_seed}")
     print(f"Error log: {error_log_file}")
     print(f"{'='*60}\n")
     
     semaphore = asyncio.Semaphore(parallel)
     
     tasks = [
-        run_single_game(i + 1, model, num_rounds, num_players, semaphore, batch_name)
+        run_single_game(i + 1, model, num_rounds, num_players, semaphore, batch_name, base_seed)
         for i in range(num_games)
     ]
     
@@ -315,6 +327,8 @@ def print_results(results: BatchResults):
 
 
 def main():
+    import random
+    
     parser = argparse.ArgumentParser(description="Run batch ONUW games")
     parser.add_argument("--games", "-g", type=int, default=10, help="Number of games to run")
     parser.add_argument("--parallel", "-p", type=int, default=5, help="Max parallel games")
@@ -322,8 +336,12 @@ def main():
     parser.add_argument("--rounds", "-r", type=int, default=5, help="Number of discussion rounds")
     parser.add_argument("--players", type=int, default=5, help="Number of players")
     parser.add_argument("--name", "-n", type=str, default=None, help="Batch name (games will be named '<name> #1', '<name> #2', etc.)")
+    parser.add_argument("--seed", "-s", type=int, default=None, help="Base seed for reproducibility (default: random)")
     
     args = parser.parse_args()
+    
+    # Generate base seed if not provided
+    base_seed = args.seed if args.seed is not None else random.randint(0, 2**32 - 1)
     
     results = asyncio.run(run_batch(
         num_games=args.games,
@@ -332,6 +350,7 @@ def main():
         num_rounds=args.rounds,
         num_players=args.players,
         batch_name=args.name,
+        base_seed=base_seed,
     ))
     
     print_results(results)

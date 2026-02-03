@@ -12,8 +12,7 @@ from collections import Counter
 from .onuw import (
     Player, Role, Phase, GameState, PublicMessage, NightAction, VoteResult,
     GameEvent, EventType, ChatMessage,
-    DEFAULT_PLAYER_NAMES, DEFAULT_ROLE_POOL, DEFAULT_DISCUSSION_ROUNDS,
-    NIGHT_ACTION_ORDER, PASSIVE_ROLES, select_roles_for_game, determine_winner, get_team,
+    NIGHT_ACTION_ORDER, PASSIVE_ROLES, determine_winner, get_team,
     GameConfig, SeededGameSetup, NightActionPlan
 )
 from .llm_client import get_llm_client, CachedLLMClient
@@ -292,21 +291,15 @@ class ONUWGame:
     
     def __init__(
         self,
-        player_names: Optional[list[str]] = None,
-        role_pool: Optional[list[Role]] = None,
-        model: str = "gpt-5-mini",
-        num_rounds: int = DEFAULT_DISCUSSION_ROUNDS,
+        config: GameConfig,
         name: Optional[str] = None,
-        config: Optional[GameConfig] = None,
     ):
         """
-        Initialize an ONUW game.
+        Initialize an ONUW game from a GameConfig.
         
-        Can be initialized in two ways:
-        1. Legacy mode: Provide player_names, role_pool, model, etc. (non-deterministic)
-        2. Config mode: Provide a GameConfig (deterministic, seeded)
-        
-        If config is provided, it takes precedence over other parameters.
+        Args:
+            config: GameConfig with seed, models, roles, names, num_rounds
+            name: Optional display name for this game
         """
         # Set up game logger first
         self.game_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -317,63 +310,33 @@ class ONUWGame:
         self.llm_client = get_llm_client(use_cache=True)
         self.broadcaster = get_broadcaster()
         
-        # Store config and setup for seeded games
-        self.config: Optional[GameConfig] = config
-        self.game_setup: Optional[SeededGameSetup] = None
-        self.players: list[Player] = []
+        # Store config and setup
+        self.config: GameConfig = config
+        self.game_setup: SeededGameSetup = SeededGameSetup(config)
+        self.num_rounds = config.num_rounds
         
-        if config is not None:
-            # Config mode: deterministic, seeded game
-            self.game_setup = SeededGameSetup(config)
-            self.num_rounds = config.num_rounds
+        # names is guaranteed to be set by GameConfig.__post_init__
+        assert config.names is not None
+        
+        # Get sorted names (SeededGameSetup sorts them)
+        sorted_names = sorted(config.names)
+        
+        # Create players with per-player models
+        self.players: list[Player] = []
+        for i, player_name in enumerate(sorted_names):
+            role = self.game_setup.player_roles[player_name]
+            # Find the model for this player (models are in original name order)
+            original_index = config.names.index(player_name)
+            player_model = config.models[original_index]
             
-            # names is guaranteed to be set by GameConfig.__post_init__
-            assert config.names is not None
-            
-            # Get sorted names (SeededGameSetup sorts them)
-            sorted_names = sorted(config.names)
-            
-            # Create players with per-player models
-            for i, player_name in enumerate(sorted_names):
-                role = self.game_setup.player_roles[player_name]
-                # Find the model for this player (models are in original name order)
-                original_index = config.names.index(player_name)
-                player_model = config.models[original_index]
-                
-                self.players.append(Player(
-                    name=player_name,
-                    model=player_model,
-                    original_role=role,
-                    current_role=role
-                ))
-            
-            center_roles = self.game_setup.center_roles
-            
-        else:
-            # Legacy mode: non-deterministic
-            if player_names is None:
-                player_names = DEFAULT_PLAYER_NAMES
-            if role_pool is None:
-                role_pool = DEFAULT_ROLE_POOL
-            
-            num_players = len(player_names)
-            required_roles = num_players + 3
-            assert len(role_pool) >= required_roles, \
-                f"Need at least {required_roles} roles for {num_players} players, have {len(role_pool)}"
-            
-            self.num_rounds = num_rounds
-            
-            # Select and distribute roles (non-deterministic)
-            player_roles, center_roles = select_roles_for_game(num_players, role_pool)
-            
-            # Sort player names alphabetically
-            sorted_names = sorted(player_names)
-            
-            # Create players - all use the same model
-            self.players = [
-                Player(name=name, model=model, original_role=role, current_role=role)
-                for name, role in zip(sorted_names, player_roles)
-            ]
+            self.players.append(Player(
+                name=player_name,
+                model=player_model,
+                original_role=role,
+                current_role=role
+            ))
+        
+        center_roles = self.game_setup.center_roles
         
         # Initialize game state
         self.state = GameState(
@@ -429,12 +392,6 @@ class ONUWGame:
         print(f"Center cards: {[r.value for r in center_roles]}")
         if config:
             print(f"Seed: {config.seed}")
-    
-    @classmethod
-    def from_config(cls, config: GameConfig, name: Optional[str] = None) -> "ONUWGame":
-        """Create a game from a GameConfig for deterministic, reproducible runs."""
-        return cls(config=config, name=name)
-    
     def _track_error(self, error_type: str, details: dict) -> None:
         """Track an error for later analysis."""
         error = {
@@ -526,9 +483,8 @@ class ONUWGame:
             # Insomniac sees their current card (after all swaps)
             context["current_role"] = player.current_role
         
-        # Get action plan (pre-determined if using config, else from LLM)
-        if self.game_setup and player.name in self.game_setup.night_action_plan:
-            # Use pre-determined action from seeded setup
+        # Get pre-determined action from seeded setup
+        if player.name in self.game_setup.night_action_plan:
             plan = self.game_setup.night_action_plan[player.name]
             
             # Handle werewolf special case: if not alone, just acknowledge
@@ -546,28 +502,25 @@ class ONUWGame:
                     action_type=plan.action_type,
                     targets=list(plan.targets)
                 )
-            
-            # Execute the action and get result BEFORE informing the agent
-            result = await self._apply_night_action(player, action)
-            action.result = result
-            
-            # Build context with results for informational prompt
-            context["predetermined_action"] = action
-            context["action_result"] = result
-            
-            # Inform the agent about what happened (informational, no choice)
-            await agent.run_night_phase_informed(context)
-            
         else:
-            # Legacy mode: get action from LLM (with tool calls)
-            action = await agent.run_night_phase(context)
-            
-            if action is None:
-                return None
-            
-            # Execute the action
-            result = await self._apply_night_action(player, action)
-            action.result = result
+            # Passive role with no night action plan
+            action = NightAction(
+                player_name=player.name,
+                original_role=role,
+                action_type="none",
+                targets=[]
+            )
+        
+        # Execute the action and get result
+        result = await self._apply_night_action(player, action)
+        action.result = result
+        
+        # Build context with results for informational prompt
+        context["predetermined_action"] = action
+        context["action_result"] = result
+        
+        # Inform the agent about what happened (informational, no choice)
+        await agent.run_night_phase(context)
         
         # Log the night action
         self.event_log.log_event("NIGHT_ACTION", {

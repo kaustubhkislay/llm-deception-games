@@ -90,7 +90,7 @@ async def run_game_from_config(config: GameConfig, name: str | None = None, port
     """Run a game from a GameConfig and return (winner, stats)."""
     reset_broadcaster()
     
-    game = ONUWGame.from_config(config, name=name)
+    game = ONUWGame(config=config, name=name)
     set_game(game)
     
     print(f"\n🌐 Web viewer available at: http://localhost:{port}/game/{game.game_id}")

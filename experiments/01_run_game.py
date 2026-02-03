@@ -3,7 +3,7 @@
 Run a full game of One Night Ultimate Werewolf with web viewer.
 
 Usage:
-    python experiments/01_run_game.py [--rounds N] [--port PORT]
+    python experiments/01_run_game.py [--seed SEED] [--rounds N] [--port PORT]
     
 The web viewer will be available at http://localhost:9000
 Open it in your browser to watch the game live.
@@ -11,6 +11,7 @@ Open it in your browser to watch the game live.
 
 import argparse
 import asyncio
+import random
 import threading
 import sys
 import time
@@ -19,7 +20,7 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from infra.onuw import DEFAULT_PLAYER_NAMES, DEFAULT_ROLE_POOL, Role
+from infra.onuw import DEFAULT_PLAYER_NAMES, DEFAULT_ROLE_POOL, Role, GameConfig
 from infra.game_engine import ONUWGame
 from infra.events import reset_broadcaster, set_web_queue
 from web.app import app, set_game, get_event_queue
@@ -37,18 +38,10 @@ def run_flask(port: int):
         print(f"Flask error: {e}")
 
 
-def create_game(num_rounds: int, model: str, role_pool: list[Role], player_names: list[str], name: str | None = None) -> ONUWGame:
+def create_game(config: GameConfig, name: str | None = None) -> ONUWGame:
     """Create and register an ONUW game. Returns the game instance."""
     reset_broadcaster()
-    
-    game = ONUWGame(
-        player_names=player_names,
-        role_pool=role_pool,
-        model=model,
-        num_rounds=num_rounds,
-        name=name,
-    )
-    
+    game = ONUWGame(config=config, name=name)
     set_game(game)
     return game
 
@@ -67,6 +60,12 @@ async def run_game(game: ONUWGame) -> tuple[str, dict]:
 
 def main():
     parser = argparse.ArgumentParser(description="Run an One Night Ultimate Werewolf game with web viewer")
+    parser.add_argument(
+        "--seed", "-s",
+        type=int,
+        default=None,
+        help="Random seed for deterministic game (default: random)"
+    )
     parser.add_argument(
         "--rounds", "-r",
         type=int, 
@@ -104,22 +103,36 @@ def main():
     )
     args = parser.parse_args()
     
+    # Generate seed if not provided
+    seed = args.seed if args.seed is not None else random.randint(0, 2**32 - 1)
+    
     # Use default player names, trim to requested count
     player_names = DEFAULT_PLAYER_NAMES[:args.players]
     
-    # Use default role pool - will select players + 3 roles
-    role_pool = DEFAULT_ROLE_POOL
+    # Use default role pool - need exactly players + 3 roles
+    num_roles_needed = args.players + 3
+    role_pool = DEFAULT_ROLE_POOL[:num_roles_needed]
+    
+    # Create config
+    config = GameConfig(
+        seed=seed,
+        models=[args.model] * args.players,
+        roles=role_pool,
+        names=player_names,
+        num_rounds=args.rounds,
+    )
     
     print("=" * 60)
     print("ONE NIGHT ULTIMATE WEREWOLF")
     print("=" * 60)
     if args.name:
         print(f"Game name: {args.name}")
+    print(f"Seed: {seed}")
     print(f"Model: {args.model}")
     print(f"Players: {args.players}")
     print(f"Discussion rounds: {args.rounds}")
     print(f"Web viewer port: {args.port}")
-    print(f"Available roles: {[r.value for r in role_pool]}")
+    print(f"Roles: {[r.value for r in role_pool]}")
     print("=" * 60)
     
     # Connect event system to web queue
@@ -131,8 +144,8 @@ def main():
     
     time.sleep(0.5)
     
-    # Create the game first to get its ID
-    game = create_game(args.rounds, args.model, role_pool, player_names, args.name)
+    # Create the game
+    game = create_game(config, args.name)
     
     print(f"\n🌐 Web viewer available at: http://localhost:{args.port}/game/{game.game_id}")
     print(f"   Open this URL in your browser to watch the game!\n")
