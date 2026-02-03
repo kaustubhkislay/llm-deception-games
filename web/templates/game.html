@@ -388,7 +388,7 @@ function renderGmMessage(content) {
     `;
 }
 
-// Render day phase
+// Render day phase - grouped by discussion rounds
 function renderDayPhase(snapshot) {
     let html = '';
     const messages = snapshot.messages || [];
@@ -396,15 +396,32 @@ function renderDayPhase(snapshot) {
     if (messages.length === 0) {
         html = '<div class="panel-placeholder">Discussion in progress...</div>';
     } else {
+        // Group messages by round number
+        const roundGroups = {};
         for (const msg of messages) {
-            const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString() : '';
-            html += `
-                <div class="chat-message" style="border-left-color: ${getPlayerColor(msg.sender)}">
-                    <span class="msg-time">${time}</span>
-                    <span class="msg-sender" style="color: ${getPlayerColor(msg.sender)}">${msg.sender}:</span>
-                    <span class="msg-content">${escapeHtml(msg.content)}</span>
-                </div>
-            `;
+            const round = msg.round || 0;
+            if (!roundGroups[round]) {
+                roundGroups[round] = [];
+            }
+            roundGroups[round].push(msg);
+        }
+        
+        // Render each round
+        const roundNums = Object.keys(roundGroups).map(Number).sort((a, b) => a - b);
+        for (const roundNum of roundNums) {
+            if (roundNum > 0) {  // Skip round 0 (GM messages)
+                html += `<div class="round-header">Round ${roundNum}</div>`;
+                html += '<div class="round-messages">';
+                for (const msg of roundGroups[roundNum]) {
+                    html += `
+                        <div class="chat-message" style="border-left-color: ${getPlayerColor(msg.sender)}">
+                            <span class="msg-sender" style="color: ${getPlayerColor(msg.sender)}">${msg.sender}:</span>
+                            <span class="msg-content">${escapeHtml(msg.content)}</span>
+                        </div>
+                    `;
+                }
+                html += '</div>';
+            }
         }
     }
     
@@ -607,13 +624,13 @@ function renderPlayerThoughts(playerName, snapshot) {
         let cssClass = `thought-${thought.role}`;
         
         if (thought.role === 'system') {
-            label = 'System Prompt';
+            label = '📋 System Prompt (Initial Instructions)';
         } else if (thought.role === 'user') {
-            label = 'Game Update';
+            label = '📥 Prompt Sent to LLM';
         } else if (thought.role === 'assistant') {
-            label = 'Thinking';
+            label = '💭 LLM Response';
         } else if (thought.role === 'tool') {
-            label = 'Tool Result';
+            label = '🔧 Tool Result';
         }
         
         let toolCallsHtml = '';
@@ -875,6 +892,14 @@ function handleEvent(event) {
             }
             if (!gameState.playerThoughts[thoughtPlayerName][thoughtPhaseKey]) {
                 gameState.playerThoughts[thoughtPlayerName][thoughtPhaseKey] = [];
+            }
+            
+            // Include system prompt if present (first thought of the game)
+            if (data.data.system_prompt) {
+                gameState.playerThoughts[thoughtPlayerName][thoughtPhaseKey].push({
+                    role: 'system',
+                    content: data.data.system_prompt
+                });
             }
             
             gameState.playerThoughts[thoughtPlayerName][thoughtPhaseKey].push({

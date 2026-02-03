@@ -3,7 +3,7 @@
 Run a full game of One Night Ultimate Werewolf with web viewer.
 
 Usage:
-    python experiments/01_run_game.py [--day-duration SECONDS] [--port PORT]
+    python experiments/01_run_game.py [--rounds N] [--port PORT]
     
 The web viewer will be available at http://localhost:9000
 Open it in your browser to watch the game live.
@@ -37,7 +37,7 @@ def run_flask(port: int):
         print(f"Flask error: {e}")
 
 
-async def run_game(day_duration: int, model: str, role_pool: list[Role], player_names: list[str]) -> tuple[str, dict]:
+async def run_game(num_rounds: int, model: str, role_pool: list[Role], player_names: list[str]) -> tuple[str, dict]:
     """Run the ONUW game. Returns (winner, usage_stats)."""
     reset_broadcaster()
     
@@ -45,7 +45,7 @@ async def run_game(day_duration: int, model: str, role_pool: list[Role], player_
         player_names=player_names,
         role_pool=role_pool,
         model=model,
-        day_duration_seconds=day_duration,
+        num_rounds=num_rounds,
     )
     
     set_game(game)
@@ -63,10 +63,10 @@ async def run_game(day_duration: int, model: str, role_pool: list[Role], player_
 def main():
     parser = argparse.ArgumentParser(description="Run an One Night Ultimate Werewolf game with web viewer")
     parser.add_argument(
-        "--day-duration", 
+        "--rounds", "-r",
         type=int, 
-        default=300,
-        help="Duration of day discussion phase in seconds (default: 300 = 5 minutes)"
+        default=5,
+        help="Number of discussion rounds (default: 5)"
     )
     parser.add_argument(
         "--port",
@@ -104,7 +104,7 @@ def main():
     print("=" * 60)
     print(f"Model: {args.model}")
     print(f"Players: {args.players}")
-    print(f"Day duration: {args.day_duration} seconds")
+    print(f"Discussion rounds: {args.rounds}")
     print(f"Web viewer port: {args.port}")
     print(f"Available roles: {[r.value for r in role_pool]}")
     print("=" * 60)
@@ -122,7 +122,7 @@ def main():
     print(f"   Open this URL in your browser to watch the game!\n")
     
     try:
-        winner, usage_stats = asyncio.run(run_game(args.day_duration, args.model, role_pool, player_names))
+        winner, usage_stats = asyncio.run(run_game(args.rounds, args.model, role_pool, player_names))
         print(f"\n{'=' * 60}")
         print(f"FINAL RESULT: {winner} WINS!")
         print(f"{'=' * 60}")

@@ -101,6 +101,7 @@ class PublicMessage:
     sender_name: str = ""
     content: str = ""
     timestamp: datetime = field(default_factory=datetime.now)
+    round_number: int = 0  # Which discussion round this message was sent in (0 = GM message)
 
 
 @dataclass
@@ -138,6 +139,8 @@ class GameState:
     
     # Chat state
     public_messages: list[PublicMessage] = field(default_factory=list)
+    current_round: int = 0  # Current discussion round (0 = not in discussion)
+    total_rounds: int = 0   # Total discussion rounds for this game
     
     # Voting state
     current_votes: dict[str, str] = field(default_factory=dict)  # voter_name -> target_name
@@ -204,6 +207,10 @@ class EventType(Enum):
     CARD_SWAP = "CARD_SWAP"               # Cards were swapped
     ROLE_PEEK = "ROLE_PEEK"               # Player looked at a card
     
+    # Round-based discussion events
+    ROUND_START = "ROUND_START"           # A discussion round is starting
+    ROUND_END = "ROUND_END"               # A discussion round has ended
+    
     # Voting and game end
     VOTE_CAST = "VOTE_CAST"
     VOTE_RESULT = "VOTE_RESULT"
@@ -256,7 +263,7 @@ DEFAULT_ROLE_POOL = [
     Role.DRUNK,
 ]
 
-DAY_PHASE_DURATION_SECONDS = 300  # 5 minutes
+DEFAULT_DISCUSSION_ROUNDS = 5  # Number of discussion rounds before voting
 
 
 def select_roles_for_game(num_players: int, role_pool: list[Role] = None) -> tuple[list[Role], list[Role]]:

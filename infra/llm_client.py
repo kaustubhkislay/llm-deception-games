@@ -230,18 +230,18 @@ class CachedLLMClient:
         self._api_calls = 0
 
 
-# Tool definitions for players
-DRAFT_MESSAGE_TOOL = {
+# Tool definitions for players - Round-based messaging
+SEND_MESSAGE_TOOL = {
     "type": "function",
     "function": {
-        "name": "draft_message",
-        "description": "Prepare a message to send. This does NOT send it yet - you'll see any new messages that arrived while drafting, then can send or revise.",
+        "name": "send_message",
+        "description": "Send a message to the group chat for this round. All players' messages are revealed simultaneously at the end of the round.",
         "parameters": {
             "type": "object",
             "properties": {
                 "content": {
                     "type": "string",
-                    "description": "The message text to draft"
+                    "description": "The message text to send"
                 }
             },
             "required": ["content"]
@@ -249,24 +249,11 @@ DRAFT_MESSAGE_TOOL = {
     }
 }
 
-SEND_MESSAGE_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "send_message",
-        "description": "Send your drafted message to the group chat. You must draft a message first using draft_message.",
-        "parameters": {
-            "type": "object",
-            "properties": {},
-            "required": []
-        }
-    }
-}
-
-WAIT_FOR_MESSAGES_TOOL = {
+PASS_TURN_TOOL = {
     "type": "function", 
     "function": {
-        "name": "wait_for_messages",
-        "description": "Wait until new messages are posted in the group chat. Use this when you want to see what others say before responding. Returns when at least one new message arrives.",
+        "name": "pass_turn",
+        "description": "Pass this round without sending a message. Use when you want to stay quiet and observe.",
         "parameters": {
             "type": "object",
             "properties": {},
@@ -436,8 +423,8 @@ ACKNOWLEDGE_TOOL = {
     }
 }
 
-# Day phase tools
-DAY_TOOLS = [DRAFT_MESSAGE_TOOL, SEND_MESSAGE_TOOL, WAIT_FOR_MESSAGES_TOOL]
+# Day phase tools (round-based)
+DAY_TOOLS = [SEND_MESSAGE_TOOL, PASS_TURN_TOOL]
 
 # Voting phase tools
 VOTING_TOOLS = [VOTE_TOOL]

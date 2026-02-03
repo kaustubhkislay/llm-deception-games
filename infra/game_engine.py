@@ -12,7 +12,7 @@ from collections import Counter
 from .onuw import (
     Player, Role, Phase, GameState, PublicMessage, NightAction, VoteResult,
     GameEvent, EventType, ChatMessage,
-    DEFAULT_PLAYER_NAMES, DEFAULT_ROLE_POOL, DAY_PHASE_DURATION_SECONDS,
+    DEFAULT_PLAYER_NAMES, DEFAULT_ROLE_POOL, DEFAULT_DISCUSSION_ROUNDS,
     NIGHT_ACTION_ORDER, PASSIVE_ROLES, select_roles_for_game, determine_winner, get_team
 )
 from .llm_client import get_llm_client, CachedLLMClient
@@ -284,7 +284,7 @@ class ONUWGame:
         player_names: list[str] = None,
         role_pool: list[Role] = None,
         model: str = "gpt-5-mini",
-        day_duration_seconds: int = DAY_PHASE_DURATION_SECONDS,
+        num_rounds: int = DEFAULT_DISCUSSION_ROUNDS,
     ):
         if player_names is None:
             player_names = DEFAULT_PLAYER_NAMES
@@ -302,7 +302,7 @@ class ONUWGame:
         self.event_log = GameEventLog(self.game_id)
         
         self.model = model
-        self.day_duration_seconds = day_duration_seconds
+        self.num_rounds = num_rounds
         self.llm_client = get_llm_client(use_cache=True)
         self.broadcaster = get_broadcaster()
         
@@ -322,15 +322,14 @@ class ONUWGame:
         self.state = GameState(
             players=self.players,
             center_cards=center_roles,
-            original_assignments={p.name: p.original_role for p in self.players}
+            original_assignments={p.name: p.original_role for p in self.players},
+            total_rounds=num_rounds
         )
         
         # Communication infrastructure
         self._message_queues: dict[str, asyncio.Queue] = {
             p.name: asyncio.Queue() for p in self.players
         }
-        self._new_message_event = asyncio.Event()
-        self._phase_end_event = asyncio.Event()
         
         # Player agents
         self.agents: dict[str, PlayerAgent] = {}
@@ -339,8 +338,6 @@ class ONUWGame:
                 player=player,
                 llm_client=self.llm_client,
                 message_queue=self._message_queues[player.name],
-                send_message_callback=self._send_message,
-                new_message_event=self._new_message_event,
                 log_thought_callback=lambda data: self.event_log.log_event("PLAYER_THOUGHT", data),
             )
         
@@ -386,45 +383,41 @@ class ONUWGame:
         )
         self.event_log.log_event("GM_MESSAGE", {"content": content, "timestamp": datetime.now().isoformat()})
     
-    async def _send_message(self, sender_name: str, content: str) -> None:
-        """Callback for players to send messages to the group chat."""
-        msg = PublicMessage(
-            sender_name=sender_name,
-            content=content,
-            timestamp=datetime.now()
-        )
-        self.state.public_messages.append(msg)
+    async def _broadcast_round_messages(self, round_num: int, messages: list[tuple[str, str]]) -> None:
+        """Broadcast all messages from a discussion round simultaneously."""
+        timestamp = datetime.now()
         
-        self._new_message_event.set()
-        self._new_message_event.clear()
-        
-        await self.broadcaster.broadcast(
-            GameEvent(
-                event_type=EventType.PUBLIC_MESSAGE,
-                data={
-                    "id": msg.id,
-                    "sender": sender_name,
-                    "content": content,
-                    "timestamp": msg.timestamp.isoformat()
-                }
+        for sender_name, content in messages:
+            msg = PublicMessage(
+                sender_name=sender_name,
+                content=content,
+                timestamp=timestamp,
+                round_number=round_num
             )
-        )
-        
-        self.event_log.log_event("PUBLIC_MESSAGE", {
-            "id": msg.id,
-            "sender": sender_name,
-            "content": content,
-            "timestamp": msg.timestamp.isoformat()
-        })
-        
-        elapsed_str = ""
-        if self.state.phase_start_time:
-            elapsed = (msg.timestamp - self.state.phase_start_time).total_seconds()
-            mins, secs = divmod(int(elapsed), 60)
-            elapsed_str = f"{mins}:{secs:02d}"
-        else:
-            elapsed_str = msg.timestamp.strftime('%H:%M:%S')
-        print(f"  [{elapsed_str}] {sender_name}: {content}")
+            self.state.public_messages.append(msg)
+            
+            await self.broadcaster.broadcast(
+                GameEvent(
+                    event_type=EventType.PUBLIC_MESSAGE,
+                    data={
+                        "id": msg.id,
+                        "sender": sender_name,
+                        "content": content,
+                        "timestamp": timestamp.isoformat(),
+                        "round": round_num
+                    }
+                )
+            )
+            
+            self.event_log.log_event("PUBLIC_MESSAGE", {
+                "id": msg.id,
+                "sender": sender_name,
+                "content": content,
+                "timestamp": timestamp.isoformat(),
+                "round": round_num
+            })
+            
+            print(f"    {sender_name}: {content}")
     
     def _get_messages(self) -> list[PublicMessage]:
         """Get all public messages."""
@@ -658,13 +651,11 @@ class ONUWGame:
     async def _run_day_phase(self) -> None:
         """Run the day discussion phase."""
         print(f"\n{'='*50}")
-        print(f"DAY PHASE - Discussion ({self.day_duration_seconds} seconds)")
+        print(f"DAY PHASE - Discussion ({self.num_rounds} rounds)")
         print(f"{'='*50}")
         
         self.state.phase = Phase.DAY
         self.state.phase_start_time = datetime.now()
-        self.state.phase_end_time = datetime.now() + timedelta(seconds=self.day_duration_seconds)
-        self._phase_end_event.clear()
         
         # Update agents
         for agent in self.agents.values():
@@ -677,48 +668,79 @@ class ONUWGame:
                 data={
                     "phase": "DAY", 
                     "day_number": 1,
-                    "duration_seconds": self.day_duration_seconds
+                    "num_rounds": self.num_rounds
                 }
             )
         )
-        self.event_log.log_event("PHASE_CHANGE", {"phase": "DAY", "day_number": 1})
+        self.event_log.log_event("PHASE_CHANGE", {"phase": "DAY", "day_number": 1, "num_rounds": self.num_rounds})
         
         await self._emit_gm_message(
-            f"The sun rises. You have {self.day_duration_seconds // 60} minutes to discuss before voting."
+            f"The sun rises. You have {self.num_rounds} rounds of discussion before voting. All messages in each round are revealed simultaneously."
         )
         
         player_names = [p.name for p in self.players]
         
-        # Start all players' day phase
-        player_tasks = []
-        for player in self.players:
-            task = asyncio.create_task(
-                self.agents[player.name].run_day_phase(
-                    player_names,
-                    self._get_messages,
-                    self._phase_end_event,
-                    phase_start_time=self.state.phase_start_time,
-                    phase_duration_seconds=self.day_duration_seconds,
+        # Run each discussion round
+        for round_num in range(1, self.num_rounds + 1):
+            self.state.current_round = round_num
+            print(f"\n--- Round {round_num} of {self.num_rounds} ---")
+            
+            # Broadcast round start
+            await self.broadcaster.broadcast(
+                GameEvent(
+                    event_type=EventType.ROUND_START,
+                    data={"round": round_num, "total_rounds": self.num_rounds}
                 )
             )
-            player_tasks.append(task)
+            self.event_log.log_event("ROUND_START", {"round": round_num, "total_rounds": self.num_rounds})
+            
+            # Collect all players' messages for this round simultaneously
+            messages_so_far = list(self.state.public_messages)
+            
+            tasks = {
+                player.name: asyncio.create_task(
+                    self.agents[player.name].run_day_round(
+                        player_names,
+                        messages_so_far,
+                        current_round=round_num,
+                        total_rounds=self.num_rounds,
+                    )
+                )
+                for player in self.players
+            }
+            
+            # Wait for all players to respond
+            results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+            
+            # Collect successful messages
+            round_messages = []
+            for player_name, result in zip(tasks.keys(), results):
+                if isinstance(result, Exception):
+                    print(f"  [{player_name}] Error: {result}")
+                    self.logger.error(f"Player {player_name} error in round {round_num}: {result}")
+                elif result is not None:
+                    round_messages.append((player_name, result))
+                else:
+                    print(f"  [{player_name}] Passed")
+            
+            # Broadcast all messages from this round together
+            if round_messages:
+                print(f"  Messages this round:")
+                await self._broadcast_round_messages(round_num, round_messages)
+            else:
+                print(f"  (No messages this round)")
+            
+            # Broadcast round end
+            await self.broadcaster.broadcast(
+                GameEvent(
+                    event_type=EventType.ROUND_END,
+                    data={"round": round_num, "message_count": len(round_messages)}
+                )
+            )
+            self.event_log.log_event("ROUND_END", {"round": round_num, "message_count": len(round_messages)})
         
-        # Wait for day phase duration
-        await asyncio.sleep(self.day_duration_seconds)
-        
-        # Signal end
-        self._phase_end_event.set()
-        self._new_message_event.set()
-        
-        # Wait for tasks to finish
-        for task in player_tasks:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-        
-        print(f"\nDay phase ended. {len(self.state.public_messages)} messages were sent.")
+        self.state.current_round = 0
+        print(f"\nDay phase ended. {len(self.state.public_messages)} messages were sent over {self.num_rounds} rounds.")
     
     async def _run_voting_phase(self) -> VoteResult:
         """Run the voting phase."""

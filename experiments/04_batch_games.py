@@ -99,7 +99,7 @@ class BatchResults:
 async def run_single_game(
     game_id: int,
     model: str,
-    day_duration: int,
+    num_rounds: int,
     num_players: int,
     semaphore: asyncio.Semaphore,
 ) -> GameResult:
@@ -114,7 +114,7 @@ async def run_single_game(
             player_names=player_names,
             role_pool=DEFAULT_ROLE_POOL,
             model=model,
-            day_duration_seconds=day_duration,
+            num_rounds=num_rounds,
         )
         
         print(f"  🎮 Game {game_id} started...")
@@ -182,21 +182,21 @@ async def run_batch(
     num_games: int,
     parallel: int,
     model: str,
-    day_duration: int,
+    num_rounds: int,
     num_players: int,
 ) -> BatchResults:
     """Run multiple games with controlled parallelism."""
     
     print(f"\n{'='*60}")
     print(f"BATCH RUN: {num_games} ONUW games (max {parallel} parallel)")
-    print(f"Model: {model} | Players: {num_players} | Day: {day_duration}s")
+    print(f"Model: {model} | Players: {num_players} | Rounds: {num_rounds}")
     print(f"Error log: {error_log_file}")
     print(f"{'='*60}\n")
     
     semaphore = asyncio.Semaphore(parallel)
     
     tasks = [
-        run_single_game(i + 1, model, day_duration, num_players, semaphore)
+        run_single_game(i + 1, model, num_rounds, num_players, semaphore)
         for i in range(num_games)
     ]
     
@@ -311,7 +311,7 @@ def main():
     parser.add_argument("--games", "-n", type=int, default=10, help="Number of games to run")
     parser.add_argument("--parallel", "-p", type=int, default=5, help="Max parallel games")
     parser.add_argument("--model", "-m", type=str, default="gpt-5-mini", help="Model to use")
-    parser.add_argument("--day-duration", "-d", type=int, default=60, help="Day phase duration (seconds)")
+    parser.add_argument("--rounds", "-r", type=int, default=5, help="Number of discussion rounds")
     parser.add_argument("--players", type=int, default=5, help="Number of players")
     
     args = parser.parse_args()
@@ -320,7 +320,7 @@ def main():
         num_games=args.games,
         parallel=args.parallel,
         model=args.model,
-        day_duration=args.day_duration,
+        num_rounds=args.rounds,
         num_players=args.players,
     ))
     

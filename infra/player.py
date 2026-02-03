@@ -3,7 +3,7 @@
 import asyncio
 import json
 from datetime import datetime
-from typing import Optional, Callable, Awaitable
+from typing import Optional, Callable
 
 from .onuw import (
     Player, Role, Phase, ChatMessage, PublicMessage, NightAction,
@@ -323,90 +323,68 @@ def get_day_phase_prompt(
     player: Player, 
     player_names: list[str], 
     messages_so_far: list[PublicMessage],
-    last_seen_count: int = 0,
-    is_first_prompt: bool = True,
-    phase_start_time: Optional[datetime] = None,
-    phase_duration_seconds: int = 300,
-    current_draft: Optional[str] = None
+    current_round: int,
+    total_rounds: int,
 ) -> str:
-    """Generate the prompt for the day discussion phase."""
-    other_players = [p for p in player_names if p != player.name]
+    """Generate the prompt for a discussion round."""
     
-    # Build draft indicator
-    draft_xml = ""
-    if current_draft:
-        draft_xml = f'\n<your_draft>"{current_draft}"</your_draft>\n'
+    # Reminder about what they learned at night
+    night_reminder = ""
+    if player.original_role == Role.SEER:
+        night_reminder = "\n<night_reminder>You are the Seer. Share or hide what you learned as you see fit.</night_reminder>"
+    elif player.original_role == Role.ROBBER:
+        night_reminder = f"\n<night_reminder>You were the Robber. Remember what role you stole!</night_reminder>"
+    elif player.original_role == Role.INSOMNIAC:
+        night_reminder = f"\n<night_reminder>You were the Insomniac. You checked your card at the end of the night.</night_reminder>"
+    elif player.original_role == Role.DRUNK:
+        night_reminder = "\n<night_reminder>You were the Drunk. You swapped with a center card but don't know what you are now!</night_reminder>"
+    elif player.original_role == Role.WEREWOLF:
+        night_reminder = "\n<night_reminder>You are a Werewolf. Lie, deflect, and survive!</night_reminder>"
+    elif player.original_role == Role.MINION:
+        night_reminder = "\n<night_reminder>You are the Minion. Protect the werewolves - they don't know you exist!</night_reminder>"
+    elif player.original_role == Role.TANNER:
+        night_reminder = "\n<night_reminder>You are the Tanner. Your goal is to get yourself killed!</night_reminder>"
     
-    # Build XML-structured message view
-    if is_first_prompt:
-        # First prompt of the day - show context and any messages
-        if messages_so_far:
-            messages_xml = "\n<town_square>\n"
-            for msg in messages_so_far:
-                messages_xml += f'  <message sender="{msg.sender_name}">{msg.content}</message>\n'
-            messages_xml += "</town_square>"
-        else:
-            messages_xml = "\n<town_square>\n  <!-- No messages yet. You may be the first to speak! -->\n</town_square>"
+    # Build message history grouped by round
+    if messages_so_far:
+        messages_xml = "\n<discussion_history>\n"
+        # Group messages by round
+        rounds_seen = set()
+        for msg in messages_so_far:
+            if msg.round_number > 0:  # Skip GM messages (round 0)
+                rounds_seen.add(msg.round_number)
         
-        duration_mins = phase_duration_seconds // 60
-        
-        # Reminder about what they learned at night
-        night_reminder = ""
-        if player.original_role == Role.SEER:
-            night_reminder = "\n<night_reminder>You are the Seer. Share or hide what you learned as you see fit.</night_reminder>"
-        elif player.original_role == Role.ROBBER:
-            night_reminder = f"\n<night_reminder>You were the Robber. Remember what role you stole!</night_reminder>"
-        elif player.original_role == Role.INSOMNIAC:
-            night_reminder = f"\n<night_reminder>You were the Insomniac. You checked your card at the end of the night.</night_reminder>"
-        elif player.original_role == Role.DRUNK:
-            night_reminder = "\n<night_reminder>You were the Drunk. You swapped with a center card but don't know what you are now!</night_reminder>"
-        elif player.original_role == Role.WEREWOLF:
-            night_reminder = "\n<night_reminder>You are a Werewolf. Lie, deflect, and survive!</night_reminder>"
-        elif player.original_role == Role.MINION:
-            night_reminder = "\n<night_reminder>You are the Minion. Protect the werewolves - they don't know you exist!</night_reminder>"
-        elif player.original_role == Role.TANNER:
-            night_reminder = "\n<night_reminder>You are the Tanner. Your goal is to get yourself killed!</night_reminder>"
-        
-        return f"""<phase>DAY - Discussion ({duration_mins} minutes)</phase>{night_reminder}{draft_xml}
+        for round_num in sorted(rounds_seen):
+            round_msgs = [m for m in messages_so_far if m.round_number == round_num]
+            messages_xml += f'  <round number="{round_num}">\n'
+            for msg in round_msgs:
+                messages_xml += f'    <message sender="{msg.sender_name}">{msg.content}</message>\n'
+            messages_xml += f'  </round>\n'
+        messages_xml += "</discussion_history>"
+    else:
+        messages_xml = "\n<discussion_history>\n  <!-- No messages yet -->\n</discussion_history>"
+    
+    rounds_remaining = total_rounds - current_round
+    
+    return f"""<phase>DAY - Discussion Round {current_round} of {total_rounds}</phase>{night_reminder}
 
 <game_state>
   <players>{', '.join(player_names)}</players>
   <you>{player.name}</you>
   <your_starting_role>{player.original_role.value}</your_starting_role>
+  <rounds_remaining>{rounds_remaining}</rounds_remaining>
 </game_state>
 {messages_xml}
 
+IMPORTANT: All players submit their messages simultaneously each round. Messages are revealed together after everyone responds.
+{"This is round 1 - you won't see others' messages until round 2." if current_round == 1 else ""}
+
+You must either:
+- send_message: Send a message to the group (it will be revealed with everyone else's messages)
+- pass_turn: Stay silent this round
+
 Discuss with other players. Try to figure out who the werewolves are (or hide if you are one!).
-Remember: Cards may have been swapped during the night!
-
-Tools: draft_message to prepare, send_message to post, wait_for_messages to listen."""
-    
-    else:
-        # Subsequent prompt - only show new messages since last seen
-        new_messages = messages_so_far[last_seen_count:]
-        
-        if new_messages:
-            messages_xml = "\n<new_messages>\n"
-            for msg in new_messages:
-                messages_xml += f'  <message sender="{msg.sender_name}">{msg.content}</message>\n'
-            messages_xml += "</new_messages>"
-        else:
-            messages_xml = "\n<new_messages>\n  <!-- No new messages -->\n</new_messages>"
-        
-        # Calculate time remaining
-        time_remaining = ""
-        if phase_start_time:
-            elapsed = (datetime.now() - phase_start_time).total_seconds()
-            remaining = max(0, phase_duration_seconds - elapsed)
-            mins, secs = divmod(int(remaining), 60)
-            time_remaining = f" (~{mins}:{secs:02d} remaining)"
-        
-        return f"""<phase>DAY - Discussion continues{time_remaining}</phase>{draft_xml}
-
-{len(new_messages)} new message(s) since you last checked.
-{messages_xml}
-
-Tools: draft_message to prepare, send_message to post, wait_for_messages to listen."""
+Remember: Cards may have been swapped during the night!"""
 
 
 def get_voting_phase_prompt(player: Player, player_names: list[str], messages: Optional[list[PublicMessage]] = None) -> str:
@@ -457,23 +435,16 @@ class PlayerAgent:
         player: Player,
         llm_client: CachedLLMClient,
         message_queue: asyncio.Queue,
-        send_message_callback: Callable[[str, str], Awaitable[None]],
-        new_message_event: asyncio.Event,
         log_thought_callback: Optional[Callable[[dict], None]] = None,
     ):
         self.player = player
         self.llm_client = llm_client
         self.message_queue = message_queue
-        self.send_message_callback = send_message_callback
-        self.new_message_event = new_message_event
         self._log_thought_callback = log_thought_callback
         self._running = False
         
         # Current phase tracking
         self._current_phase: str = "NIGHT"
-        
-        # Draft message
-        self._current_draft: Optional[str] = None
         
         # Track whether we've logged the system prompt in player thoughts
         self._has_logged_system_prompt = False
@@ -566,28 +537,17 @@ class PlayerAgent:
         
         return response
     
-    async def _handle_tool_call(self, tool_call: dict) -> str:
+    def _handle_tool_call(self, tool_call: dict) -> str:
         """Execute a tool call and return the result."""
         func_name = tool_call["function"]["name"]
         args = json.loads(tool_call["function"]["arguments"])
         
-        if func_name == "draft_message":
-            content = args["content"]
-            self._current_draft = content
-            return f"Draft saved: \"{content}\"\nUse send_message to post it, or draft_message again to revise."
+        if func_name == "send_message":
+            content = args.get("content", "")
+            return f"SEND_MESSAGE:{content}"
         
-        elif func_name == "send_message":
-            if self._current_draft is None:
-                return "Error: No draft to send. Use draft_message first."
-            content = self._current_draft
-            self._current_draft = None
-            await self.send_message_callback(self.player.name, content)
-            return f"Message sent: {content}"
-        
-        elif func_name == "wait_for_messages":
-            print(f"  [{self.player.name}] Waiting for new messages...")
-            await self.new_message_event.wait()
-            return "New messages have arrived. Check the chat."
+        elif func_name == "pass_turn":
+            return "PASS_TURN"
         
         elif func_name == "cast_vote":
             target = args["target"]
@@ -668,7 +628,7 @@ class PlayerAgent:
         action = None
         if response.tool_calls:
             for tool_call in response.tool_calls:
-                result = await self._handle_tool_call(tool_call)
+                result = self._handle_tool_call(tool_call)
                 
                 self.player.chat_history.append(ChatMessage(
                     role="tool",
@@ -737,67 +697,53 @@ class PlayerAgent:
         print(f"[{self.player.name}] Night action: {action}")
         return action
     
-    async def run_day_phase(
+    async def run_day_round(
         self,
         player_names: list[str],
-        get_messages: Callable[[], list[PublicMessage]],
-        phase_end_event: asyncio.Event,
-        phase_start_time: Optional[datetime] = None,
-        phase_duration_seconds: int = 300,
-    ) -> None:
-        """Run the player's day phase loop."""
+        messages_so_far: list[PublicMessage],
+        current_round: int,
+        total_rounds: int,
+    ) -> Optional[str]:
+        """
+        Run a single discussion round for this player.
+        
+        Returns the message content to send, or None if player passes.
+        """
         self._current_phase = "DAY"
-        self._running = True
-        last_seen_count = 0
-        is_first_prompt = True
-        print(f"[{self.player.name}] Starting day phase")
+        print(f"[{self.player.name}] Round {current_round}/{total_rounds}")
         
-        while self._running and not phase_end_event.is_set():
-            current_messages = get_messages()
-            
-            prompt = get_day_phase_prompt(
-                self.player, 
-                player_names, 
-                current_messages,
-                last_seen_count=last_seen_count,
-                is_first_prompt=is_first_prompt,
-                phase_start_time=phase_start_time,
-                phase_duration_seconds=phase_duration_seconds,
-                current_draft=self._current_draft,
-            )
-            
-            last_seen_count = len(current_messages)
-            is_first_prompt = False
-            
-            try:
-                response = await asyncio.wait_for(
-                    self._call_llm(prompt, DAY_TOOLS),
-                    timeout=30.0
-                )
-            except asyncio.TimeoutError:
-                print(f"  [{self.player.name}] LLM call timed out, retrying...")
-                continue
-            
-            if phase_end_event.is_set():
-                break
-            
-            if response.tool_calls:
-                for tool_call in response.tool_calls:
-                    result = await self._handle_tool_call(tool_call)
-                    
-                    self.player.chat_history.append(ChatMessage(
-                        role="tool",
-                        content=result,
-                        tool_call_id=tool_call["id"]
-                    ))
-                    
-                    if phase_end_event.is_set():
-                        break
-            else:
-                await asyncio.sleep(1.0)
+        prompt = get_day_phase_prompt(
+            self.player, 
+            player_names, 
+            messages_so_far,
+            current_round=current_round,
+            total_rounds=total_rounds,
+        )
         
-        self._running = False
-        print(f"[{self.player.name}] Day phase ended")
+        # Require a tool call (either send_message or pass_turn)
+        # No timeout - wait for the LLM to respond (errors will propagate up)
+        response = await self._call_llm(prompt, DAY_TOOLS, tool_choice="required")
+        
+        if response.tool_calls:
+            for tool_call in response.tool_calls:
+                result = self._handle_tool_call(tool_call)
+                
+                self.player.chat_history.append(ChatMessage(
+                    role="tool",
+                    content=result,
+                    tool_call_id=tool_call["id"]
+                ))
+                
+                if result.startswith("SEND_MESSAGE:"):
+                    content = result[13:]  # Remove "SEND_MESSAGE:" prefix
+                    print(f"  [{self.player.name}] Sending message: {content[:50]}...")
+                    return content
+                elif result == "PASS_TURN":
+                    print(f"  [{self.player.name}] Passed this round")
+                    return None
+        
+        print(f"  [{self.player.name}] No valid tool call, treating as pass")
+        return None
     
     async def run_voting_phase(self, player_names: list[str], messages: Optional[list[PublicMessage]] = None) -> tuple[Optional[str], Optional[str]]:
         """Run the voting phase and return (vote_target, reasoning) tuple."""
@@ -811,7 +757,7 @@ class PlayerAgent:
         
         if response.tool_calls:
             for tool_call in response.tool_calls:
-                result = await self._handle_tool_call(tool_call)
+                result = self._handle_tool_call(tool_call)
                 
                 self.player.chat_history.append(ChatMessage(
                     role="tool",
@@ -837,7 +783,6 @@ class PlayerAgent:
     def set_phase(self, phase: str) -> None:
         """Set the current game phase."""
         self._current_phase = phase
-        self._current_draft = None
     
     def stop(self) -> None:
         """Stop the player's current phase loop."""

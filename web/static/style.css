@@ -560,6 +560,27 @@ h2 {
 }
 
 /* Day Phase - Chat Messages */
+.round-header {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--accent-gold);
+    margin: 1.5rem 0 0.75rem;
+    padding: 0.5rem 1rem;
+    background: rgba(194, 163, 59, 0.1);
+    border-radius: var(--radius);
+    text-align: center;
+}
+
+.round-header:first-child {
+    margin-top: 0;
+}
+
+.round-messages {
+    margin-bottom: 1rem;
+}
+
 .chat-message {
     padding: 0.75rem 1rem;
     margin-bottom: 0.5rem;
@@ -748,6 +769,11 @@ h2 {
     border-left: 3px solid var(--accent-purple);
 }
 
+.thought-system .thought-content {
+    max-height: 200px;
+    font-size: 0.75rem;
+}
+
 .thought-user {
     background: rgba(59, 139, 194, 0.1);
     border-left: 3px solid var(--accent-blue);
@@ -773,10 +799,17 @@ h2 {
 }
 
 .thought-content {
-    font-size: 0.9rem;
-    line-height: 1.5;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    line-height: 1.6;
     white-space: pre-wrap;
     word-wrap: break-word;
+    background: var(--bg-dark);
+    padding: 0.75rem;
+    border-radius: 4px;
+    margin-top: 0.5rem;
+    max-height: 500px;
+    overflow-y: auto;
 }
 
 .tool-call {
