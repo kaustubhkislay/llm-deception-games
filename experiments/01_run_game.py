@@ -37,8 +37,8 @@ def run_flask(port: int):
         print(f"Flask error: {e}")
 
 
-async def run_game(num_rounds: int, model: str, role_pool: list[Role], player_names: list[str]) -> tuple[str, dict]:
-    """Run the ONUW game. Returns (winner, usage_stats)."""
+def create_game(num_rounds: int, model: str, role_pool: list[Role], player_names: list[str], name: str | None = None) -> ONUWGame:
+    """Create and register an ONUW game. Returns the game instance."""
     reset_broadcaster()
     
     game = ONUWGame(
@@ -46,10 +46,15 @@ async def run_game(num_rounds: int, model: str, role_pool: list[Role], player_na
         role_pool=role_pool,
         model=model,
         num_rounds=num_rounds,
+        name=name,
     )
     
     set_game(game)
-    
+    return game
+
+
+async def run_game(game: ONUWGame) -> tuple[str, dict]:
+    """Run the ONUW game. Returns (winner, usage_stats)."""
     winner = await game.run_game()
     
     usage_stats = {
@@ -91,6 +96,12 @@ def main():
         action="store_true",
         help="Keep web server running after game ends (requires Ctrl+C to exit)"
     )
+    parser.add_argument(
+        "--name", "-n",
+        type=str,
+        default=None,
+        help="Display name for this game (shown in game list)"
+    )
     args = parser.parse_args()
     
     # Use default player names, trim to requested count
@@ -102,6 +113,8 @@ def main():
     print("=" * 60)
     print("ONE NIGHT ULTIMATE WEREWOLF")
     print("=" * 60)
+    if args.name:
+        print(f"Game name: {args.name}")
     print(f"Model: {args.model}")
     print(f"Players: {args.players}")
     print(f"Discussion rounds: {args.rounds}")
@@ -118,11 +131,14 @@ def main():
     
     time.sleep(0.5)
     
-    print(f"\n🌐 Web viewer available at: http://localhost:{args.port}")
+    # Create the game first to get its ID
+    game = create_game(args.rounds, args.model, role_pool, player_names, args.name)
+    
+    print(f"\n🌐 Web viewer available at: http://localhost:{args.port}/game/{game.game_id}")
     print(f"   Open this URL in your browser to watch the game!\n")
     
     try:
-        winner, usage_stats = asyncio.run(run_game(args.rounds, args.model, role_pool, player_names))
+        winner, usage_stats = asyncio.run(run_game(game))
         print(f"\n{'=' * 60}")
         print(f"FINAL RESULT: {winner} WINS!")
         print(f"{'=' * 60}")

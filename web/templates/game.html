@@ -4,6 +4,7 @@
 
 {% block content %}
 <header class="game-header">
+    <a href="/" class="back-btn">← Games</a>
     <h1>One Night Ultimate Werewolf</h1>
     <div id="phase-indicator" class="phase-badge phase-unknown">
         <span class="phase-name">Loading...</span>
@@ -65,6 +66,9 @@
 
 {% block scripts %}
 <script>
+// Game ID from template
+const GAME_ID = "{{ game_id }}";
+
 // Game state
 let gameState = {
     phase: 'UNKNOWN',
@@ -943,19 +947,19 @@ function handleEvent(event) {
     }
 }
 
-// Connect to SSE
-const evtSource = new EventSource('/events');
+// Connect to SSE for this specific game
+const evtSource = new EventSource(`/game/${GAME_ID}/events`);
 evtSource.onmessage = handleEvent;
 evtSource.onerror = function(e) {
     console.error('SSE error:', e);
 };
 
 // Initial load
-fetch('/api/state')
+fetch(`/api/game/${GAME_ID}/state`)
     .then(r => r.json())
     .then(data => {
         if (data.error) {
-            panelContent.innerHTML = '<div class="panel-placeholder">Waiting for game to start...</div>';
+            panelContent.innerHTML = '<div class="panel-placeholder">Game not found or waiting to start...</div>';
         } else {
             gameState.players = data.players;
             gameState.phase = data.phase;

@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}Game Viewer - Select a Game{% endblock %}
+
+{% block content %}
+<header class="games-header">
+    <h1>One Night Ultimate Werewolf</h1>
+    <div class="header-subtitle">Game Viewer</div>
+</header>
+
+<main class="games-container">
+    <div class="games-list-header">
+        <h2>Available Games</h2>
+        <span id="games-count" class="games-count">Loading...</span>
+    </div>
+    
+    <div id="games-list" class="games-list">
+        <div class="games-loading">Loading games...</div>
+    </div>
+</main>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadGames() {
+    const gamesList = document.getElementById('games-list');
+    const gamesCount = document.getElementById('games-count');
+    
+    try {
+        const response = await fetch('/api/games');
+        const data = await response.json();
+        
+        if (data.games.length === 0) {
+            gamesList.innerHTML = '<div class="no-games">No games found in game_logs/</div>';
+            gamesCount.textContent = '0 games';
+            return;
+        }
+        
+        gamesCount.textContent = `${data.games.length} game${data.games.length !== 1 ? 's' : ''}`;
+        
+        gamesList.innerHTML = data.games.map(game => {
+            const displayName = game.name || game.game_id;
+            return `
+                <a href="/game/${game.game_id}" class="game-item">
+                    <span class="game-name">${escapeHtml(displayName)}</span>
+                    <span class="game-arrow">→</span>
+                </a>
+            `;
+        }).join('');
+    } catch (error) {
+        console.error('Error loading games:', error);
+        gamesList.innerHTML = '<div class="games-error">Error loading games</div>';
+        gamesCount.textContent = 'Error';
+    }
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Load games on page load
+loadGames();
+</script>
+{% endblock %}

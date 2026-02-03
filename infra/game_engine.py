@@ -72,6 +72,8 @@ def load_game_from_log(log_path: str) -> dict:
     all_votes: dict[str, dict] = {}
     phase = "GAME_OVER"
     winner: Optional[str] = None
+    game_name: Optional[str] = None
+    game_id: Optional[str] = None
     phase_history: list[dict] = []
     player_thoughts: dict[str, dict[str, list]] = {}
     current_phase_events: list[dict] = []
@@ -109,6 +111,8 @@ def load_game_from_log(log_path: str) -> dict:
             timestamp = event.get("timestamp", "")
             
             if event_type == "GAME_INIT":
+                game_id = data.get("game_id")
+                game_name = data.get("name")
                 for p in data.get("players", []):
                     players[p["name"]] = {
                         "original_role": p["original_role"],
@@ -265,6 +269,8 @@ def load_game_from_log(log_path: str) -> dict:
     player_list = snapshot_players()
     
     return {
+        "game_id": game_id,
+        "name": game_name,
         "phase": phase,
         "day_number": 1,
         "players": player_list,
@@ -286,6 +292,7 @@ class ONUWGame:
         role_pool: list[Role] = None,
         model: str = "gpt-5-mini",
         num_rounds: int = DEFAULT_DISCUSSION_ROUNDS,
+        name: Optional[str] = None,
     ):
         if player_names is None:
             player_names = DEFAULT_PLAYER_NAMES
@@ -302,6 +309,7 @@ class ONUWGame:
         self.logger = setup_game_logger(self.game_id)
         self.event_log = GameEventLog(self.game_id)
         
+        self.name = name  # Optional display name for this game
         self.model = model
         self.num_rounds = num_rounds
         self.llm_client = get_llm_client(use_cache=True)
@@ -354,6 +362,7 @@ class ONUWGame:
         
         self.event_log.log_event("GAME_INIT", {
             "game_id": self.game_id,
+            "name": self.name,
             "players": [{"name": p.name, "original_role": p.original_role.value, "current_role": p.current_role.value} for p in self.players],
             "center_cards": [r.value for r in center_roles]
         })

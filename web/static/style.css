@@ -1157,3 +1157,124 @@ button:hover {
         display: none; /* Hide on mobile for now */
     }
 }
+
+/* ============================================
+   Games List View
+   ============================================ */
+
+.games-header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 2rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.header-subtitle {
+    font-size: 1rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    margin-top: 0.5rem;
+}
+
+.games-container {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 2rem;
+}
+
+.games-list-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5rem;
+}
+
+.games-list-header h2 {
+    margin: 0;
+    padding: 0;
+    border: none;
+}
+
+.games-count {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.games-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.game-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 1.25rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    text-decoration: none;
+    color: var(--text-primary);
+    transition: all 0.2s;
+}
+
+.game-item:hover {
+    background: var(--bg-hover);
+    border-color: var(--accent-gold);
+    transform: translateX(4px);
+}
+
+.game-name {
+    font-size: 1rem;
+    font-weight: 500;
+}
+
+.game-arrow {
+    color: var(--text-muted);
+    font-size: 1.1rem;
+    transition: transform 0.2s;
+}
+
+.game-item:hover .game-arrow {
+    color: var(--accent-gold);
+    transform: translateX(4px);
+}
+
+.games-loading,
+.no-games,
+.games-error {
+    text-align: center;
+    padding: 3rem;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.games-error {
+    color: var(--accent-red);
+}
+
+/* Back Button (Header) */
+.back-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    cursor: pointer;
+    border-radius: var(--radius);
+    text-decoration: none;
+    transition: all 0.2s;
+}
+
+.back-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    border-color: var(--accent-gold);
+}

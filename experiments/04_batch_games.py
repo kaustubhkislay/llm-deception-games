@@ -102,6 +102,7 @@ async def run_single_game(
     num_rounds: int,
     num_players: int,
     semaphore: asyncio.Semaphore,
+    batch_name: str | None = None,
 ) -> GameResult:
     """Run a single ONUW game."""
     async with semaphore:
@@ -110,11 +111,15 @@ async def run_single_game(
         # Create player names
         player_names = ["Alice", "Bob", "Charlie", "Diana", "Edward", "Fiona", "George"][:num_players]
         
+        # Generate game name if batch_name provided
+        game_name = f"{batch_name} #{game_id}" if batch_name else None
+        
         game = ONUWGame(
             player_names=player_names,
             role_pool=DEFAULT_ROLE_POOL,
             model=model,
             num_rounds=num_rounds,
+            name=game_name,
         )
         
         print(f"  🎮 Game {game_id} started...")
@@ -184,11 +189,14 @@ async def run_batch(
     model: str,
     num_rounds: int,
     num_players: int,
+    batch_name: str | None = None,
 ) -> BatchResults:
     """Run multiple games with controlled parallelism."""
     
     print(f"\n{'='*60}")
     print(f"BATCH RUN: {num_games} ONUW games (max {parallel} parallel)")
+    if batch_name:
+        print(f"Batch name: {batch_name}")
     print(f"Model: {model} | Players: {num_players} | Rounds: {num_rounds}")
     print(f"Error log: {error_log_file}")
     print(f"{'='*60}\n")
@@ -196,7 +204,7 @@ async def run_batch(
     semaphore = asyncio.Semaphore(parallel)
     
     tasks = [
-        run_single_game(i + 1, model, num_rounds, num_players, semaphore)
+        run_single_game(i + 1, model, num_rounds, num_players, semaphore, batch_name)
         for i in range(num_games)
     ]
     
@@ -308,11 +316,12 @@ def print_results(results: BatchResults):
 
 def main():
     parser = argparse.ArgumentParser(description="Run batch ONUW games")
-    parser.add_argument("--games", "-n", type=int, default=10, help="Number of games to run")
+    parser.add_argument("--games", "-g", type=int, default=10, help="Number of games to run")
     parser.add_argument("--parallel", "-p", type=int, default=5, help="Max parallel games")
     parser.add_argument("--model", "-m", type=str, default="gpt-5-mini", help="Model to use")
     parser.add_argument("--rounds", "-r", type=int, default=5, help="Number of discussion rounds")
     parser.add_argument("--players", type=int, default=5, help="Number of players")
+    parser.add_argument("--name", "-n", type=str, default=None, help="Batch name (games will be named '<name> #1', '<name> #2', etc.)")
     
     args = parser.parse_args()
     
@@ -322,6 +331,7 @@ def main():
         model=args.model,
         num_rounds=args.rounds,
         num_players=args.players,
+        batch_name=args.name,
     ))
     
     print_results(results)
