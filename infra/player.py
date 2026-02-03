@@ -566,10 +566,8 @@ class PlayerAgent:
         
         print(f"  [{self.player.name}] Calling LLM...")
         
-        # Use reasoning summary for gpt-5-mini to get detailed reasoning output
-        reasoning_settings = None
-        if "gpt-5-mini" in self.player.model:
-            reasoning_settings = {"effort": "medium", "summary": "detailed"}
+        # Use reasoning settings from player config (if set)
+        reasoning_settings = self.player.reasoning_settings
         
         response = await self.llm_client.chat_completion(
             model=self.player.model,

@@ -321,19 +321,20 @@ class ONUWGame:
         # Get sorted names (SeededGameSetup sorts them)
         sorted_names = sorted(config.names)
         
-        # Create players with per-player models
+        # Create players with per-player models and reasoning settings
         self.players: list[Player] = []
         for i, player_name in enumerate(sorted_names):
             role = self.game_setup.player_roles[player_name]
-            # Find the model for this player (models are in original name order)
+            # Find the model config for this player (models are in original name order)
             original_index = config.names.index(player_name)
-            player_model = config.models[original_index]
+            model_config = config.models[original_index]
             
             self.players.append(Player(
                 name=player_name,
-                model=player_model,
+                model=model_config.model,
                 original_role=role,
-                current_role=role
+                current_role=role,
+                reasoning_settings=model_config.get_reasoning_settings()
             ))
         
         center_roles = self.game_setup.center_roles

@@ -77,12 +77,50 @@ class ChatMessage:
 
 
 @dataclass
+class ModelConfig:
+    """Configuration for a model including reasoning settings."""
+    model: str
+    reasoning_effort: Optional[str] = None  # "low", "medium", "high", or None for no reasoning
+    reasoning_summary: Optional[str] = None  # "auto", "concise", "detailed", or None
+    
+    def to_dict(self) -> dict:
+        """Serialize to dict."""
+        d: dict = {"model": self.model}
+        if self.reasoning_effort is not None:
+            d["reasoning_effort"] = self.reasoning_effort
+        if self.reasoning_summary is not None:
+            d["reasoning_summary"] = self.reasoning_summary
+        return d
+    
+    @classmethod
+    def from_dict(cls, data: dict | str) -> "ModelConfig":
+        """Deserialize from dict or string (for backward compatibility)."""
+        if isinstance(data, str):
+            return cls(model=data)
+        return cls(
+            model=data["model"],
+            reasoning_effort=data.get("reasoning_effort"),
+            reasoning_summary=data.get("reasoning_summary"),
+        )
+    
+    def get_reasoning_settings(self) -> Optional[dict]:
+        """Get reasoning settings dict for LLM API, or None if no reasoning."""
+        if self.reasoning_effort is None:
+            return None
+        settings: dict = {"effort": self.reasoning_effort}
+        if self.reasoning_summary is not None:
+            settings["summary"] = self.reasoning_summary
+        return settings
+
+
+@dataclass
 class Player:
     """A player in the game."""
     name: str
     model: str
     original_role: Role  # The role they started with (used for night actions)
     current_role: Role   # Their current role (may be swapped)
+    reasoning_settings: Optional[dict] = None  # Reasoning settings for LLM API
     chat_history: list[ChatMessage] = field(default_factory=list)
     
     def __hash__(self):
@@ -270,7 +308,7 @@ DEFAULT_DISCUSSION_ROUNDS = 5  # Number of discussion rounds before voting
 class GameConfig:
     """Configuration for a deterministic game run."""
     seed: int
-    models: list[str]  # One model per player
+    models: list[ModelConfig]  # One model config per player
     roles: list[Role]  # Exactly num_players + 3 roles
     names: Optional[list[str]] = None  # Player names (defaults to DEFAULT_PLAYER_NAMES)
     num_rounds: int = DEFAULT_DISCUSSION_ROUNDS
@@ -295,7 +333,7 @@ class GameConfig:
         """Serialize config for logging/storage."""
         return {
             "seed": self.seed,
-            "models": self.models,
+            "models": [m.to_dict() for m in self.models],
             "roles": [r.value for r in self.roles],
             "names": self.names,
             "num_rounds": self.num_rounds,
@@ -306,7 +344,7 @@ class GameConfig:
         """Deserialize config from dict."""
         return cls(
             seed=data["seed"],
-            models=data["models"],
+            models=[ModelConfig.from_dict(m) for m in data["models"]],
             roles=[Role(r) for r in data["roles"]],
             names=data.get("names"),
             num_rounds=data.get("num_rounds", DEFAULT_DISCUSSION_ROUNDS),
