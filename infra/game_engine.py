@@ -809,7 +809,7 @@ class ONUWGame:
         await self._emit_gm_message("Time to vote! Point at who you think is a Werewolf.")
         
         player_names = [p.name for p in self.players]
-        valid_targets = set(player_names + ["no_one"])
+        valid_targets = set(player_names)
         
         # Collect votes in parallel
         votes: dict[str, str] = {}
@@ -823,29 +823,25 @@ class ONUWGame:
         results = await asyncio.gather(*voting_tasks)
         
         for player_name, vote, reasoning in results:
-            # Normalize vote
-            normalized_vote = vote
-            if vote and vote.lower() == "no_one":
-                normalized_vote = "no_one"
-            
-            if normalized_vote and normalized_vote in valid_targets:
-                votes[player_name] = normalized_vote
+            # Validate vote is a valid player (not self-vote allowed, must be another player)
+            if vote and vote in valid_targets and vote != player_name:
+                votes[player_name] = vote
                 vote_reasonings[player_name] = reasoning or ""
-                self.state.current_votes[player_name] = normalized_vote
+                self.state.current_votes[player_name] = vote
                 
                 await self.broadcaster.broadcast(
                     GameEvent(
                         event_type=EventType.VOTE_CAST,
                         data={
                             "voter": player_name, 
-                            "target": normalized_vote,
+                            "target": vote,
                             "reasoning": reasoning
                         }
                     )
                 )
                 self.event_log.log_event("VOTE_REASONING", {
                     "voter": player_name, 
-                    "target": normalized_vote,
+                    "target": vote,
                     "reasoning": reasoning
                 })
             else:
@@ -877,13 +873,12 @@ class ONUWGame:
         
         # Announce results
         print(f"\nVotes: {votes}")
-        if killed_players:
-            print(f"Killed: {killed_players}")
-            killed_str = ", ".join(killed_players)
-            await self._emit_gm_message(f"The village points... {killed_str} {'is' if len(killed_players) == 1 else 'are'} killed!")
+        print(f"Killed: {killed_players}")
+        killed_str = ", ".join(killed_players)
+        if len(killed_players) == 1:
+            await self._emit_gm_message(f"The village points... {killed_str} is killed!")
         else:
-            print("No one was killed")
-            await self._emit_gm_message("The village points... but no one has enough votes. No one dies!")
+            await self._emit_gm_message(f"The village points... it's a tie! {killed_str} are all killed!")
         
         return result
     
@@ -944,10 +939,11 @@ class ONUWGame:
                 print(f"  No werewolf was killed -> WEREWOLF wins!")
         else:
             print(f"  No werewolves among players (all in center)")
-            if killed:
-                print(f"  Someone was killed -> WEREWOLF team wins!")
+            minion_killed = any(p.current_role == Role.MINION for p in self.players if p.name in killed)
+            if minion_killed:
+                print(f"  Minion was killed -> WEREWOLF team wins!")
             else:
-                print(f"  No one was killed -> VILLAGE wins!")
+                print(f"  Minion survived -> VILLAGE wins!")
         
         await self.broadcaster.broadcast(
             GameEvent(

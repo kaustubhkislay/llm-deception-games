@@ -27,9 +27,9 @@ ROLE_DESCRIPTIONS = {
     Role.HUNTER: "HUNTER: No night action. If you die, the player you voted for also dies.",
     # Werewolf Team
     Role.WEREWOLF: "WEREWOLF: Wake up and see other werewolves. If you're the ONLY werewolf, you may look at one center card.",
-    Role.MINION: "MINION: Wake up and see who the werewolves are. They don't know you exist. You win with werewolves.",
+    Role.MINION: "MINION: Wake up and see who the werewolves are. They don't know you exist. You win with werewolves, unless there are no werewolves, in which case you win if you are killed in the vote.",
     # Neutral
-    Role.TANNER: "TANNER: No night action. You WIN if you get killed. You LOSE if you survive.",
+    Role.TANNER: "TANNER: No night action. You WIN if you get killed in the vote. You LOSE if you survive.",
 }
 
 # Night action order for each role (only include if role is active)
@@ -92,8 +92,8 @@ def get_game_rules(active_roles: list[Role]) -> str:
     win_conditions = """WIN CONDITIONS:
 - VILLAGE TEAM wins if at least one Werewolf player is killed
 - WEREWOLF TEAM wins if no Werewolf player is killed
-- If there are NO werewolves among players (all in center), Village wins only if NO ONE is killed
-- If there is a tied vote, both players die"""
+- If there are NO werewolves among players (all in center), Minion wins if they are killed, otherwise Village wins
+- In case of a tied vote, ALL tied players die"""
     
     if Role.TANNER in active_set:
         win_conditions += "\n- TANNER wins if the Tanner is killed (this overrides all other win conditions)"
@@ -105,7 +105,7 @@ def get_game_rules(active_roles: list[Role]) -> str:
     strategy_notes += "- From a town perspective, sharing information can help the town figure out what happened during the night. On the other hand, withholding information can be useful for catching werewolves in lies. Lying can similarly help catch werewolves in lies, but risks looking like a werewolf yourself and misleading the town."
     strategy_notes += "- From a werewolf perspective, you need to claim some role to avoid being suspicious. Committing to a story later in the discussion reduces the risk of contradicting other players information, but claims made earlier are more trustworthy precisely because they are risky for werewolves to make."
     if Role.TANNER in active_set:
-        strategy_notes += "- From a tanner perspective, the game is a delicate balancing act of being suspicious enough to seem like a werewolf, but not so suspicious that you seem like a tanner."
+        strategy_notes += "- From a tanner perspective, the game is a balancing act of being suspicious enough to seem like a werewolf, but not so suspicious that you seem like a tanner."
     
     return f"""=== ONE NIGHT ULTIMATE WEREWOLF RULES ===
 
@@ -120,7 +120,7 @@ This is a single-night social deduction game. Each player is dealt a secret role
 
 # Brief instruction for action formatting
 REASONING_INSTRUCTION = """
-Use chain of thought to reason through your actions carefully. Before you decide on your action for each round, summarize your reasoning in a few sentences. Then use the send_message tool if you wish to speak this round, or the pass_turn tool if you wish to stay quiet this round and observe."""
+Think carefully about your strategy. When you use send_message, include ONLY what you want to say out loud - no reasoning, no labels, no meta-commentary. Just the words you'd speak."""
 
 
 def get_role_system_prompt(role: Role, player_name: str, active_roles: list[Role]) -> str:
@@ -241,22 +241,19 @@ def get_night_phase_prompt(player: Player, context: dict) -> str:
         return """<phase>NIGHT</phase>
 <your_role>VILLAGER</your_role>
 
-You have no night action. The night passes quietly for you.
-During the day, use your deduction skills to help find the werewolves."""
+You have no night action. The night passes quietly for you."""
 
     elif role == Role.HUNTER:
         return """<phase>NIGHT</phase>
 <your_role>HUNTER</your_role>
 
-You have no night action. The night passes quietly for you.
-Remember: If you die in the vote, whoever you voted for also dies!"""
+You have no night action. The night passes quietly for you."""
 
     elif role == Role.TANNER:
         return """<phase>NIGHT</phase>
 <your_role>TANNER</your_role>
 
-You have no night action. The night passes quietly for you.
-Remember: Your goal is to get yourself killed in the vote!"""
+You have no night action. The night passes quietly for you."""
 
     elif role == Role.WEREWOLF:
         other_werewolves = context.get("other_werewolves", [])
@@ -266,7 +263,7 @@ Remember: Your goal is to get yourself killed in the vote!"""
 <teammate>{', '.join(other_werewolves)}</teammate>
 
 You wake up and see your fellow werewolf: {', '.join(other_werewolves)}.
-You exchange a knowing glance. During the day, coordinate your stories to avoid detection!"""
+You exchange a knowing glance."""
         else:
             # Lone werewolf looked at center
             position = action.targets[0] if action and action.targets else "center_0"
@@ -287,20 +284,14 @@ This tells you that {result} is NOT held by any player - useful information for 
 <werewolves>{', '.join(werewolves)}</werewolves>
 
 You wake up and see that the werewolf player(s) are: {', '.join(werewolves)}.
-They don't know you exist or that you're helping them!
-
-Your job during the day: Protect them. Mislead the village. Take the fall if needed.
-You win if no werewolf is killed - even if YOU die!"""
+They don't know you exist!"""
         else:
             return """<phase>NIGHT - MINION</phase>
 <your_role>MINION</your_role>
 <werewolves>None!</werewolves>
 
 You wake up and see... NO werewolves! Both werewolf cards must be in the center.
-This is dangerous for you - the village wins if no one dies.
-
-Your job: Make sure SOMEONE gets voted out (but not yourself)!
-Cause chaos, make accusations, do whatever it takes to get the village to kill someone."""
+This means you win if you are killed in the vote."""
 
     elif role == Role.SEER:
         if action and action.action_type == "look_player":
@@ -311,9 +302,7 @@ Cause chaos, make accusations, do whatever it takes to get the village to kill s
 <result>{result}</result>
 
 You wake up and look at {target}'s card.
-You see that {target} is the {result}!
-
-This is powerful information. Use it wisely during the day - but be careful, cards may have been swapped AFTER you looked!"""
+You see that {target} is a {result}!"""
         else:
             # Looked at center
             positions = [t.split("_")[1] for t in action.targets] if action else ["0", "1"]
@@ -327,7 +316,7 @@ This is powerful information. Use it wisely during the day - but be careful, car
 You wake up and look at center card positions {' and '.join(positions)}.
 You see: {roles_str}
 
-These roles are NOT held by any player. This helps you know what's actually in play!"""
+These roles are NOT held by any player."""
 
     elif role == Role.ROBBER:
         target = action.targets[0] if action else "someone"
@@ -340,8 +329,7 @@ You wake up and swap your card with {target}'s card.
 You look at your new card and see: {result}
 
 You are now the {result}! This is your new role and team allegiance.
-Note: {target} now has your old Robber card (but doesn't know it).
-Warning: The Troublemaker acts after you, so your card might get swapped again!"""
+{target} now has your old Robber card (but doesn't know it)."""
 
     elif role == Role.TROUBLEMAKER:
         if action and len(action.targets) >= 2:
@@ -355,7 +343,7 @@ Warning: The Troublemaker acts after you, so your card might get swapped again!"
 You wake up and swap {player1}'s card with {player2}'s card.
 You do NOT see what their cards are - you just know they've been swapped!
 
-Neither {player1} nor {player2} knows they've been swapped. This can cause chaos during the day when people's claims don't match up!"""
+Neither {player1} nor {player2} knows they've been swapped."""
 
     elif role == Role.DRUNK:
         position = action.targets[0].split("_")[1] if action and action.targets else "0"
@@ -364,10 +352,7 @@ Neither {player1} nor {player2} knows they've been swapped. This can cause chaos
 <action>Swapped with center position {position}</action>
 
 You wake up in a daze and swap your card with center card position {position}.
-You do NOT see what your new card is!
-
-You have no idea what role you are now. You could be anything - even a Werewolf!
-During the day, you should probably mention you were the Drunk and see if anyone has info about the center cards."""
+You do NOT see what your new card is!"""
 
     elif role == Role.INSOMNIAC:
         current_role = context.get("current_role", Role.INSOMNIAC)
@@ -380,19 +365,15 @@ During the day, you should probably mention you were the Drunk and see if anyone
 
 You wake up LAST (after all other night actions) and look at your card.
 Your card has been SWAPPED! You are now the {current_role.value}!
-
-Someone (the Robber or Troublemaker) changed your card during the night.
 This is your new role and team allegiance."""
         else:
-            return f"""<phase>NIGHT - INSOMNIAC</phase>
+            return """<phase>NIGHT - INSOMNIAC</phase>
 <your_role>INSOMNIAC</your_role>
 <current_card>INSOMNIAC</current_card>
 <swapped>NO</swapped>
 
 You wake up LAST (after all other night actions) and look at your card.
-Your card is still the Insomniac - no one swapped you!
-
-You can confidently claim Insomniac during the day and know you're still on the village team."""
+Your card is still the Insomniac!"""
 
     return "<phase>NIGHT</phase>\nUnknown role - waiting for dawn."
 
@@ -409,19 +390,19 @@ def get_day_phase_prompt(
     # Reminder about what they learned at night
     night_reminder = ""
     if player.original_role == Role.SEER:
-        night_reminder = "\n<night_reminder>You are the Seer. Share or hide what you learned as you see fit.</night_reminder>"
+        night_reminder = "\n<night_reminder>You started as the Seer, and you saw what you saw. But remember, your role may have been swapped during the night!</night_reminder>"
     elif player.original_role == Role.ROBBER:
-        night_reminder = f"\n<night_reminder>You were the Robber. Remember what role you stole!</night_reminder>"
+        night_reminder = "\n<night_reminder>You started as the Robber. Remember, the troublemaker may have swapped your card again after you did!</night_reminder>"
     elif player.original_role == Role.INSOMNIAC:
-        night_reminder = f"\n<night_reminder>You were the Insomniac. You checked your card at the end of the night.</night_reminder>"
+        night_reminder = "\n<night_reminder>You started as the Insomniac. You checked your card at the end of the night, so you know your new role and whether you were swapped or not.</night_reminder>"
     elif player.original_role == Role.DRUNK:
-        night_reminder = "\n<night_reminder>You were the Drunk. You swapped with a center card but don't know what you are now!</night_reminder>"
+        night_reminder = "\n<night_reminder>You started as the Drunk. You swapped with a center card but don't know what you are now!</night_reminder>"
     elif player.original_role == Role.WEREWOLF:
-        night_reminder = "\n<night_reminder>You are a Werewolf. Lie, deflect, and survive!</night_reminder>"
+        night_reminder = "\n<night_reminder>You started as a Werewolf. Remember, your role may have been swapped during the night!</night_reminder>"
     elif player.original_role == Role.MINION:
-        night_reminder = "\n<night_reminder>You are the Minion. Protect the werewolves - they don't know you exist!</night_reminder>"
+        night_reminder = "\n<night_reminder>You started as the Minion. Remember, your role may have been swapped during the night!</night_reminder>"
     elif player.original_role == Role.TANNER:
-        night_reminder = "\n<night_reminder>You are the Tanner. Your goal is to get yourself killed!</night_reminder>"
+        night_reminder = "\n<night_reminder>You started as the Tanner. Remember, your role may have been swapped during the night!</night_reminder>"
     
     # Build message history grouped by round
     if messages_so_far:
@@ -458,11 +439,15 @@ IMPORTANT: All players submit their messages simultaneously each round. Messages
 {"This is round 1 - you won't see others' messages until round 2." if current_round == 1 else ""}
 
 You must either:
-- send_message: Send a message to the group (it will be revealed with everyone else's messages)
+- send_message: Send a PUBLIC message to the group (all players will see this!)
 - pass_turn: Stay silent this round
 
-Discuss with other players. Try to figure out who the werewolves are (or hide if you are one!).
-Remember: Cards may have been swapped during the night!"""
+CRITICAL FORMAT RULES:
+- The send_message content should ONLY contain what you would literally say out loud
+- Do NOT include labels like "Public message:" or "Private reasoning:"
+- Do NOT include meta-commentary like "I can't share my reasoning" or "Here's what I'll say:"
+- Do NOT prefix with your name - just the message itself
+- Your internal reasoning happens automatically via the model's thinking - you don't need to write it out"""
 
 
 def get_voting_phase_prompt(player: Player, player_names: list[str], messages: Optional[list[PublicMessage]] = None) -> str:
@@ -474,35 +459,21 @@ def get_voting_phase_prompt(player: Player, player_names: list[str], messages: O
     if messages:
         claims_summary = "\n<discussion_summary>\n"
         for msg in messages[-15:]:  # Last 15 messages
-            claims_summary += f"  {msg.sender_name}: {msg.content[:200]}{'...' if len(msg.content) > 200 else ''}\n"
+            claims_summary += f"  {msg.sender_name}: {msg.content}\n"
         claims_summary += "</discussion_summary>\n"
-    
-    vote_options = other_players + ["no_one"]
-    
-    # Role-specific voting reminder
-    voting_reminder = ""
-    if player.original_role == Role.TANNER:
-        voting_reminder = "\n<reminder>You are the Tanner - you WIN if you get killed! Consider voting for someone unlikely to vote for you.</reminder>"
-    elif player.original_role == Role.MINION:
-        voting_reminder = "\n<reminder>You are the Minion - protect the werewolves! Vote for a villager or take suspicion off them.</reminder>"
-    elif player.original_role == Role.WEREWOLF:
-        voting_reminder = "\n<reminder>You are a Werewolf - don't vote for your teammate! Deflect to a villager.</reminder>"
-    elif player.original_role == Role.HUNTER:
-        voting_reminder = "\n<reminder>You are the Hunter - if you die, whoever you vote for also dies! Vote carefully.</reminder>"
     
     return f"""<phase>VOTING</phase>
 
 <players>{', '.join(player_names)}</players>
-<vote_options>{', '.join(vote_options)}</vote_options>
-{claims_summary}{voting_reminder}
+<vote_options>{', '.join(other_players)}</vote_options>
+{claims_summary}
 This is the final vote. The player(s) with the most votes will die.
+In case of a tie, ALL tied players die.
 - If a Werewolf dies: Village team wins
 - If no Werewolf dies: Werewolf team wins  
 - If Tanner dies: Tanner wins
 
-Vote for a player name or "no_one" to vote for no lynch.
-
-Use cast_vote to submit your vote."""
+You must vote for another player. Use cast_vote to submit your vote."""
 
 
 class PlayerAgent:
@@ -575,12 +546,19 @@ class PlayerAgent:
         self.player.chat_history.append(ChatMessage(role="user", content=prompt))
         
         print(f"  [{self.player.name}] Calling LLM...")
+        
+        # Use reasoning summary for gpt-5-mini to get detailed reasoning output
+        reasoning_settings = None
+        if "gpt-5-mini" in self.player.model:
+            reasoning_settings = {"effort": "medium", "summary": "detailed"}
+        
         response = await self.llm_client.chat_completion(
             model=self.player.model,
             messages=self.player.chat_history,
             tools=tools if tools else None,
             tool_choice=tool_choice,
             temperature=1,
+            reasoning=reasoning_settings,
         )
         
         assistant_msg = ChatMessage(

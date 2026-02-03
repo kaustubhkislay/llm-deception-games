@@ -495,21 +495,14 @@ def determine_winner(state: GameState) -> tuple[str, list[str]]:
         Tuple of (winner, killed_players) where:
         - winner: "VILLAGE", "WEREWOLF", or "TANNER"
         - killed_players: List of player names who were killed
+    
+    Note: In ties, ALL tied players die. There is no "no one dies" outcome.
     """
     votes = state.current_votes
     
-    # Count votes (excluding "no_one" votes for counting max)
+    # Count votes for each player
     from collections import Counter
-    vote_counts = Counter(v for v in votes.values() if v != "no_one")
-    
-    # Check if everyone voted no_one
-    if not vote_counts:
-        # No one was voted for - check if werewolves exist
-        werewolves_in_game = [p.name for p in state.players if p.current_role == Role.WEREWOLF]
-        if werewolves_in_game:
-            return "WEREWOLF", []
-        else:
-            return "VILLAGE", []
+    vote_counts = Counter(votes.values())
     
     # Find max votes and who got them (ties = multiple deaths)
     max_votes = max(vote_counts.values())
@@ -525,7 +518,7 @@ def determine_winner(state: GameState) -> tuple[str, list[str]]:
         if player and player.current_role == Role.HUNTER:
             # Hunter's vote target also dies
             hunter_target = votes.get(player_name)
-            if hunter_target and hunter_target != "no_one" and hunter_target not in killed:
+            if hunter_target and hunter_target not in killed:
                 hunter_additional_kill = hunter_target
                 killed.append(hunter_target)
                 killed_roles.append(state.get_current_role(hunter_target))
@@ -541,12 +534,14 @@ def determine_winner(state: GameState) -> tuple[str, list[str]]:
     werewolves_in_game = [p.name for p in state.players if p.current_role == Role.WEREWOLF]
     
     if not werewolves_in_game:
-        # No werewolves in game - village wins if no one died
-        if not killed:
-            return "VILLAGE", []
-        else:
-            # Village killed an innocent - werewolf team wins (even though no werewolves)
+        # No werewolves in game - Minion wins only if they are killed
+        if Role.MINION in killed_roles:
+            # Minion was killed - Minion/Werewolf team wins
+            # (Minion's goal when no werewolves: get themselves killed)
             return "WEREWOLF", killed
+        else:
+            # Minion survived - village wins
+            return "VILLAGE", killed
     
     # Normal case: village wins if at least one werewolf killed
     if Role.WEREWOLF in killed_roles:
