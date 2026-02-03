@@ -89,10 +89,10 @@ def get_game_rules(active_roles: list[Role]) -> str:
             order_num += 1
     
     # Build win conditions (adjust based on active roles)
-    win_conditions = """WIN CONDITIONS:
+    win_conditions = f"""WIN CONDITIONS:
 - VILLAGE TEAM wins if at least one Werewolf player is killed
 - WEREWOLF TEAM wins if no Werewolf player is killed
-- If there are NO werewolves among players (all in center), Minion wins if they are killed, otherwise Village wins
+{"- If there are NO werewolves among players (all in center), Minion wins if they are killed, otherwise Village wins" if Role.MINION in active_set else ""}
 - In case of a tied vote, ALL tied players die"""
     
     if Role.TANNER in active_set:
@@ -102,26 +102,21 @@ def get_game_rules(active_roles: list[Role]) -> str:
     strategy_notes = "\nIMPORTANT STRATEGY NOTES:\n"
     strategy_notes += "- Your starting role determines your night action, but your FINAL role (after swaps) determines your team for winning\n"
     strategy_notes += "- You should keep in mind the possibility that your role was swapped during the night. This is a key part of the game.\n"
-    strategy_notes += "- From a town perspective, sharing information can help the town figure out what happened during the night. On the other hand, withholding information can be useful for catching werewolves in lies. Lying can similarly help catch werewolves in lies, but risks looking like a werewolf yourself and misleading the town."
-    strategy_notes += "- From a werewolf perspective, you need to claim some role to avoid being suspicious. Committing to a story later in the discussion reduces the risk of contradicting other players information, but claims made earlier are more trustworthy precisely because they are risky for werewolves to make."
+    strategy_notes += "- From a town perspective, sharing information can help the town figure out what happened during the night. On the other hand, withholding information can be useful for catching werewolves in lies. Lying can similarly help catch werewolves in lies, but risks looking like a werewolf yourself and misleading the town.\n"
+    strategy_notes += "- From a werewolf perspective, you need to claim some role to avoid being suspicious. Committing to a story later in the discussion reduces the risk of contradicting other players information, but claims made earlier are more trustworthy precisely because they are risky for werewolves to make.\n"
     if Role.TANNER in active_set:
-        strategy_notes += "- From a tanner perspective, the game is a balancing act of being suspicious enough to seem like a werewolf, but not so suspicious that you seem like a tanner."
+        strategy_notes += "- From a tanner perspective, the game is a balancing act of being suspicious enough to seem like a werewolf, but not so suspicious that you seem like a tanner.\n"
     
     return f"""=== ONE NIGHT ULTIMATE WEREWOLF RULES ===
 
 OVERVIEW:
-This is a single-night social deduction game. Each player is dealt a secret role card. During the night, players with special abilities wake up in a specific order and take actions. Some actions can SWAP cards - meaning your role might change without you knowing! After the night, there is one discussion period and one vote. The player(s) with the most votes die.
+This is a single-night social deduction game. Each player is dealt a secret role card. During the night, players with special abilities wake up in a specific order and take actions. Some actions can SWAP cards - meaning your role (and win conditions) might change without you knowing! After the night, there is one discussion period and one vote. The player(s) with the most votes die.
 
 {win_conditions}
 
 {roles_section}
 {night_order_section}
 {strategy_notes}"""
-
-# Brief instruction for action formatting
-REASONING_INSTRUCTION = """
-Think carefully about your strategy. When you use send_message, include ONLY what you want to say out loud - no reasoning, no labels, no meta-commentary. Just the words you'd speak."""
-
 
 def get_role_system_prompt(role: Role, player_name: str, active_roles: list[Role]) -> str:
     """Generate the system prompt for a player based on their starting role."""
@@ -224,7 +219,7 @@ Remember: someone might have swapped your role during the night!
     }
     
     base = get_game_rules(active_roles) + role_specific.get(role, "")
-    return base + f"\nYour name is {player_name}.\n" + REASONING_INSTRUCTION
+    return base + f"\nYour name is {player_name}.\n"
 
 
 def get_night_phase_prompt(player: Player, context: dict) -> str:
@@ -378,14 +373,14 @@ Your card is still the Insomniac!"""
     return "<phase>NIGHT</phase>\nUnknown role - waiting for dawn."
 
 
-def get_day_phase_prompt(
+def _build_day_context(
     player: Player, 
     player_names: list[str], 
     messages_so_far: list[PublicMessage],
     current_round: int,
     total_rounds: int,
 ) -> str:
-    """Generate the prompt for a discussion round."""
+    """Build the context portion of the day phase prompt."""
     
     # Reminder about what they learned at night
     night_reminder = ""
@@ -435,19 +430,43 @@ def get_day_phase_prompt(
 </game_state>
 {messages_xml}
 
-IMPORTANT: All players submit their messages simultaneously each round. Messages are revealed together after everyone responds.
-{"This is round 1 - you won't see others' messages until round 2." if current_round == 1 else ""}
+All players submit their messages simultaneously each round. Messages are revealed together after everyone responds.
+{"This is round 1 - you won't see others' messages until round 2." if current_round == 1 else ""}"""
+
+
+def get_day_thinking_prompt(
+    player: Player, 
+    player_names: list[str], 
+    messages_so_far: list[PublicMessage],
+    current_round: int,
+    total_rounds: int,
+) -> str:
+    """Generate the thinking prompt for a discussion round (no tools)."""
+    context = _build_day_context(player, player_names, messages_so_far, current_round, total_rounds)
+    
+    return f"""{context}
+
+THINKING PHASE: Before deciding what to do, analyze the current situation.
+
+Consider:
+1. What do you know from your night action?
+2. What have other players claimed? Are there contradictions?
+3. Who might be lying? Who seems trustworthy?
+4. What is your current win condition (considering possible role swaps)?
+5. Should you speak this round or stay silent? What would you say?
+
+Think through this carefully. After you respond, you'll be asked to take an action."""
+
+
+def get_day_action_prompt() -> str:
+    """Generate the action prompt for a discussion round (with tools)."""
+    return """Now take your action for this round.
 
 You must either:
 - send_message: Send a PUBLIC message to the group (all players will see this!)
 - pass_turn: Stay silent this round
 
-CRITICAL FORMAT RULES:
-- The send_message content should ONLY contain what you would literally say out loud
-- Do NOT include labels like "Public message:" or "Private reasoning:"
-- Do NOT include meta-commentary like "I can't share my reasoning" or "Here's what I'll say:"
-- Do NOT prefix with your name - just the message itself
-- Your internal reasoning happens automatically via the model's thinking - you don't need to write it out"""
+If you send a message, include ONLY what you want to say out loud. No labels, no reasoning - just your actual words."""
 
 
 def get_voting_phase_prompt(player: Player, player_names: list[str], messages: Optional[list[PublicMessage]] = None) -> str:
@@ -654,12 +673,17 @@ class PlayerAgent:
         """
         Run a single discussion round for this player.
         
+        Uses a two-step process:
+        1. First, prompt the model to think (no tools) - generates reasoning
+        2. Then, prompt the model to take action (with tools)
+        
         Returns the message content to send, or None if player passes.
         """
         self._current_phase = "DAY"
         print(f"[{self.player.name}] Round {current_round}/{total_rounds}")
         
-        prompt = get_day_phase_prompt(
+        # Step 1: Thinking phase (no tools)
+        thinking_prompt = get_day_thinking_prompt(
             self.player, 
             player_names, 
             messages_so_far,
@@ -667,9 +691,14 @@ class PlayerAgent:
             total_rounds=total_rounds,
         )
         
-        # Require a tool call (either send_message or pass_turn)
-        # No timeout - wait for the LLM to respond (errors will propagate up)
-        response = await self._call_llm(prompt, DAY_TOOLS, tool_choice="required")
+        print(f"  [{self.player.name}] Thinking...")
+        await self._call_llm(thinking_prompt, tools=[], tool_choice=None)
+        
+        # Step 2: Action phase (with tools)
+        action_prompt = get_day_action_prompt()
+        
+        print(f"  [{self.player.name}] Taking action...")
+        response = await self._call_llm(action_prompt, DAY_TOOLS, tool_choice="required")
         
         if response.tool_calls:
             for tool_call in response.tool_calls:
