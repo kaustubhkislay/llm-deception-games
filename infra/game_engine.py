@@ -331,6 +331,9 @@ class ONUWGame:
             p.name: asyncio.Queue() for p in self.players
         }
         
+        # Active roles in this game (players + center)
+        active_roles = player_roles + center_roles
+        
         # Player agents
         self.agents: dict[str, PlayerAgent] = {}
         for player in self.players:
@@ -338,6 +341,7 @@ class ONUWGame:
                 player=player,
                 llm_client=self.llm_client,
                 message_queue=self._message_queues[player.name],
+                active_roles=active_roles,
                 log_thought_callback=lambda data: self.event_log.log_event("PLAYER_THOUGHT", data),
             )
         

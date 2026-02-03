@@ -19,60 +19,116 @@ from .llm_client import (
 from .events import get_broadcaster
 
 
-# Comprehensive game rules - shared by all players
-GAME_RULES = """
-=== ONE NIGHT ULTIMATE WEREWOLF RULES ===
+# Role descriptions - can be filtered based on active roles
+ROLE_DESCRIPTIONS = {
+    # Village Team
+    Role.VILLAGER: "VILLAGER: No special ability. Just deduce and vote.",
+    Role.SEER: "SEER: Wake up and look at ONE player's card OR TWO center cards.",
+    Role.ROBBER: "ROBBER: Wake up and swap your card with another player's card. You see your NEW card.",
+    Role.TROUBLEMAKER: "TROUBLEMAKER: Wake up and swap TWO OTHER players' cards. You don't see the cards.",
+    Role.DRUNK: "DRUNK: Wake up and swap your card with a center card. You DON'T see your new card.",
+    Role.INSOMNIAC: "INSOMNIAC: Wake up LAST and look at your own card (to see if it was swapped).",
+    Role.HUNTER: "HUNTER: No night action. If you die, the player you voted for also dies.",
+    # Werewolf Team
+    Role.WEREWOLF: "WEREWOLF: Wake up and see other werewolves. If you're the ONLY werewolf, you may look at one center card.",
+    Role.MINION: "MINION: Wake up and see who the werewolves are. They don't know you exist. You win with werewolves.",
+    # Neutral
+    Role.TANNER: "TANNER: No night action. You WIN if you get killed. You LOSE if you survive.",
+}
+
+# Night action order for each role (only include if role is active)
+NIGHT_ACTION_ORDER_DESCRIPTIONS = {
+    Role.WEREWOLF: "Werewolf(s) - see each other, or if alone, may peek at center",
+    Role.MINION: "Minion - sees the werewolves",
+    Role.SEER: "Seer - looks at one player OR two center cards",
+    Role.ROBBER: "Robber - swaps with a player and sees new card",
+    Role.TROUBLEMAKER: "Troublemaker - swaps two other players' cards",
+    Role.DRUNK: "Drunk - swaps with center (blind)",
+    Role.INSOMNIAC: "Insomniac - sees own card",
+}
+
+# Canonical night action order
+NIGHT_ACTION_ORDER_LIST = [
+    Role.WEREWOLF, Role.MINION, Role.SEER, Role.ROBBER, 
+    Role.TROUBLEMAKER, Role.DRUNK, Role.INSOMNIAC
+]
+
+def get_game_rules(active_roles: list[Role]) -> str:
+    """Generate game rules showing only the roles active in this game."""
+    active_set = set(active_roles)
+    
+    # Categorize active roles by team
+    village_roles = [r for r in [Role.VILLAGER, Role.SEER, Role.ROBBER, Role.TROUBLEMAKER, 
+                                  Role.DRUNK, Role.INSOMNIAC, Role.HUNTER] if r in active_set]
+    werewolf_roles = [r for r in [Role.WEREWOLF, Role.MINION] if r in active_set]
+    neutral_roles = [r for r in [Role.TANNER] if r in active_set]
+    
+    # Build role descriptions
+    roles_section = "ROLES IN THIS GAME:\n\n"
+    
+    if village_roles:
+        roles_section += "Village Team:\n"
+        for r in village_roles:
+            roles_section += f"- {ROLE_DESCRIPTIONS[r]}\n"
+        roles_section += "\n"
+    
+    if werewolf_roles:
+        roles_section += "Werewolf Team:\n"
+        for r in werewolf_roles:
+            roles_section += f"- {ROLE_DESCRIPTIONS[r]}\n"
+        roles_section += "\n"
+    
+    if neutral_roles:
+        roles_section += "Neutral:\n"
+        for r in neutral_roles:
+            roles_section += f"- {ROLE_DESCRIPTIONS[r]}\n"
+        roles_section += "\n"
+    
+    # Build night action order (only for active roles with night actions)
+    night_order_section = "NIGHT ACTION ORDER:\n"
+    order_num = 1
+    for role in NIGHT_ACTION_ORDER_LIST:
+        if role in active_set and role in NIGHT_ACTION_ORDER_DESCRIPTIONS:
+            night_order_section += f"{order_num}. {NIGHT_ACTION_ORDER_DESCRIPTIONS[role]}\n"
+            order_num += 1
+    
+    # Build win conditions (adjust based on active roles)
+    win_conditions = """WIN CONDITIONS:
+- VILLAGE TEAM wins if at least one Werewolf player is killed
+- WEREWOLF TEAM wins if no Werewolf player is killed
+- If there are NO werewolves among players (all in center), Village wins only if NO ONE is killed"""
+    
+    if Role.TANNER in active_set:
+        win_conditions += "\n- TANNER wins if the Tanner is killed (this overrides other conditions)"
+    
+    # Build strategy notes (adjust based on active roles)
+    strategy_notes = "\nIMPORTANT STRATEGY NOTES:\n"
+    strategy_notes += "- Your starting role determines your night action, but your FINAL role (after swaps) determines your team for winning\n"
+    
+    if Role.ROBBER in active_set:
+        strategy_notes += "- The Robber knows their new role, but may have been swapped again by Troublemaker\n"
+    if Role.DRUNK in active_set:
+        strategy_notes += "- The Drunk doesn't know what they became\n"
+    strategy_notes += "- Claims during day discussion may be true, false, or outdated (due to swaps)\n"
+    strategy_notes += "- Pay attention to what information each role would and wouldn't have\n"
+    
+    return f"""=== ONE NIGHT ULTIMATE WEREWOLF RULES ===
 
 OVERVIEW:
 This is a single-night social deduction game. Each player is dealt a secret role card. During the night, players with special abilities wake up in a specific order and take actions. Some actions can SWAP cards - meaning your role might change without you knowing! After the night, there is one discussion period and one vote. The player(s) with the most votes die.
 
-WIN CONDITIONS:
-- VILLAGE TEAM wins if at least one Werewolf player is killed
-- WEREWOLF TEAM wins if no Werewolf player is killed
-- If there are NO werewolves among players (all in center), Village wins only if NO ONE is killed
-- TANNER wins if the Tanner is killed (this overrides other conditions)
+{win_conditions}
 
-ROLES:
-
-Village Team:
-- VILLAGER: No special ability. Just deduce and vote.
-- SEER: Wake up and look at ONE player's card OR TWO center cards.
-- ROBBER: Wake up and swap your card with another player's card. You see your NEW card.
-- TROUBLEMAKER: Wake up and swap TWO OTHER players' cards. You don't see the cards.
-- DRUNK: Wake up and swap your card with a center card. You DON'T see your new card.
-- INSOMNIAC: Wake up LAST and look at your own card (to see if it was swapped).
-- HUNTER: No night action. If you die, the player you voted for also dies.
-
-Werewolf Team:
-- WEREWOLF: Wake up and see other werewolves. If you're the ONLY werewolf, you may look at one center card.
-- MINION: Wake up and see who the werewolves are. They don't know you exist. You win with werewolves.
-
-Neutral:
-- TANNER: No night action. You WIN if you get killed. You LOSE if you survive.
-
-NIGHT ACTION ORDER:
-1. Werewolf(s) - see each other, or if alone, may peek at center
-2. Minion - sees the werewolves
-3. Seer - looks at one player OR two center cards
-4. Robber - swaps with a player and sees new card
-5. Troublemaker - swaps two other players' cards
-6. Drunk - swaps with center (blind)
-7. Insomniac - sees own card
-
-IMPORTANT STRATEGY NOTES:
-- Your starting role determines your night action, but your FINAL role (after swaps) determines your team for winning
-- The Robber knows their new role, but may have been swapped again by Troublemaker
-- The Drunk doesn't know what they became
-- Claims during day discussion may be true, false, or outdated (due to swaps)
-- Pay attention to what information each role would and wouldn't have
-"""
+{roles_section}
+{night_order_section}
+{strategy_notes}"""
 
 # Brief instruction for action formatting
 REASONING_INSTRUCTION = """
 Before acting, briefly state your thinking (1-2 sentences). Then use the appropriate tool."""
 
 
-def get_role_system_prompt(role: Role, player_name: str) -> str:
+def get_role_system_prompt(role: Role, player_name: str, active_roles: list[Role]) -> str:
     """Generate the system prompt for a player based on their starting role."""
     
     role_specific = {
@@ -182,7 +238,7 @@ You are not on any team. You only win if you die.
 """
     }
     
-    base = GAME_RULES + role_specific.get(role, "")
+    base = get_game_rules(active_roles) + role_specific.get(role, "")
     return base + f"\nYour name is {player_name}.\n" + REASONING_INSTRUCTION
 
 
@@ -435,6 +491,7 @@ class PlayerAgent:
         player: Player,
         llm_client: CachedLLMClient,
         message_queue: asyncio.Queue,
+        active_roles: list[Role],
         log_thought_callback: Optional[Callable[[dict], None]] = None,
     ):
         self.player = player
@@ -450,7 +507,7 @@ class PlayerAgent:
         self._has_logged_system_prompt = False
         
         # Initialize chat history with system prompt
-        self._system_prompt = get_role_system_prompt(player.original_role, player.name)
+        self._system_prompt = get_role_system_prompt(player.original_role, player.name, active_roles)
         self.player.chat_history = [
             ChatMessage(role="system", content=self._system_prompt)
         ]
