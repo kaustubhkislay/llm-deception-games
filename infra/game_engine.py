@@ -230,6 +230,15 @@ def load_game_from_log(log_path: str) -> dict:
                 if phase_key not in player_thoughts[player_name]:
                     player_thoughts[player_name][phase_key] = []
                 
+                # If this thought includes the system prompt, prepend it
+                # This allows reconstructing the full chat thread by appending all phases
+                system_prompt = data.get("system_prompt")
+                if system_prompt:
+                    player_thoughts[player_name][phase_key].append({
+                        "role": "system",
+                        "content": system_prompt
+                    })
+                
                 player_thoughts[player_name][phase_key].append({
                     "role": "user",
                     "content": data.get("prompt")
@@ -988,6 +997,15 @@ class ONUWGame:
                     player_thoughts[player_name] = {}
                 if phase_key not in player_thoughts[player_name]:
                     player_thoughts[player_name][phase_key] = []
+                
+                # If this thought includes the system prompt, prepend it
+                # This allows reconstructing the full chat thread by appending all phases
+                system_prompt = data.get("system_prompt")
+                if system_prompt:
+                    player_thoughts[player_name][phase_key].append({
+                        "role": "system",
+                        "content": system_prompt
+                    })
                 
                 player_thoughts[player_name][phase_key].append({
                     "role": "user",

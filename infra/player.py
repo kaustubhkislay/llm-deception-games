@@ -475,10 +475,13 @@ class PlayerAgent:
         # Draft message
         self._current_draft: Optional[str] = None
         
+        # Track whether we've logged the system prompt in player thoughts
+        self._has_logged_system_prompt = False
+        
         # Initialize chat history with system prompt
-        system_prompt = get_role_system_prompt(player.original_role, player.name)
+        self._system_prompt = get_role_system_prompt(player.original_role, player.name)
         self.player.chat_history = [
-            ChatMessage(role="system", content=system_prompt)
+            ChatMessage(role="system", content=self._system_prompt)
         ]
     
     def _cleanup_dangling_tool_calls(self) -> None:
@@ -545,6 +548,12 @@ class PlayerAgent:
             "tool_calls": response.tool_calls,
             "phase": self._current_phase,
         }
+        
+        # Include system prompt in the first thought event so that 
+        # appending all private thoughts recreates the full chat thread
+        if not self._has_logged_system_prompt:
+            thought_data["system_prompt"] = self._system_prompt
+            self._has_logged_system_prompt = True
         
         broadcaster = get_broadcaster()
         await broadcaster.broadcast(
