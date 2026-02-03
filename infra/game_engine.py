@@ -6,14 +6,15 @@ import random
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from collections import Counter
 
 from .onuw import (
     Player, Role, Phase, GameState, PublicMessage, NightAction, VoteResult,
     GameEvent, EventType, ChatMessage,
     DEFAULT_PLAYER_NAMES, DEFAULT_ROLE_POOL, DEFAULT_DISCUSSION_ROUNDS,
-    NIGHT_ACTION_ORDER, PASSIVE_ROLES, select_roles_for_game, determine_winner, get_team
+    NIGHT_ACTION_ORDER, PASSIVE_ROLES, select_roles_for_game, determine_winner, get_team,
+    GameConfig, SeededGameSetup, NightActionPlan
 )
 from .llm_client import get_llm_client, CachedLLMClient
 from .player import PlayerAgent
@@ -288,51 +289,95 @@ class ONUWGame:
     
     def __init__(
         self,
-        player_names: list[str] = None,
-        role_pool: list[Role] = None,
+        player_names: Optional[list[str]] = None,
+        role_pool: Optional[list[Role]] = None,
         model: str = "gpt-5-mini",
         num_rounds: int = DEFAULT_DISCUSSION_ROUNDS,
         name: Optional[str] = None,
+        config: Optional[GameConfig] = None,
     ):
-        if player_names is None:
-            player_names = DEFAULT_PLAYER_NAMES
-        if role_pool is None:
-            role_pool = DEFAULT_ROLE_POOL
+        """
+        Initialize an ONUW game.
         
-        num_players = len(player_names)
-        required_roles = num_players + 3
-        assert len(role_pool) >= required_roles, \
-            f"Need at least {required_roles} roles for {num_players} players, have {len(role_pool)}"
+        Can be initialized in two ways:
+        1. Legacy mode: Provide player_names, role_pool, model, etc. (non-deterministic)
+        2. Config mode: Provide a GameConfig (deterministic, seeded)
         
-        # Set up game logger
+        If config is provided, it takes precedence over other parameters.
+        """
+        # Set up game logger first
         self.game_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.logger = setup_game_logger(self.game_id)
         self.event_log = GameEventLog(self.game_id)
         
-        self.name = name  # Optional display name for this game
-        self.model = model
-        self.num_rounds = num_rounds
+        self.name = name
         self.llm_client = get_llm_client(use_cache=True)
         self.broadcaster = get_broadcaster()
         
-        # Select and distribute roles
-        player_roles, center_roles = select_roles_for_game(num_players, role_pool)
+        # Store config and setup for seeded games
+        self.config: Optional[GameConfig] = config
+        self.game_setup: Optional[SeededGameSetup] = None
+        self.players: list[Player] = []
         
-        # Sort player names alphabetically
-        sorted_names = sorted(player_names)
-        
-        # Create players - both original_role and current_role start the same
-        self.players: list[Player] = [
-            Player(name=name, model=model, original_role=role, current_role=role)
-            for name, role in zip(sorted_names, player_roles)
-        ]
+        if config is not None:
+            # Config mode: deterministic, seeded game
+            self.game_setup = SeededGameSetup(config)
+            self.num_rounds = config.num_rounds
+            
+            # names is guaranteed to be set by GameConfig.__post_init__
+            assert config.names is not None
+            
+            # Get sorted names (SeededGameSetup sorts them)
+            sorted_names = sorted(config.names)
+            
+            # Create players with per-player models
+            for i, player_name in enumerate(sorted_names):
+                role = self.game_setup.player_roles[player_name]
+                # Find the model for this player (models are in original name order)
+                original_index = config.names.index(player_name)
+                player_model = config.models[original_index]
+                
+                self.players.append(Player(
+                    name=player_name,
+                    model=player_model,
+                    original_role=role,
+                    current_role=role
+                ))
+            
+            center_roles = self.game_setup.center_roles
+            
+        else:
+            # Legacy mode: non-deterministic
+            if player_names is None:
+                player_names = DEFAULT_PLAYER_NAMES
+            if role_pool is None:
+                role_pool = DEFAULT_ROLE_POOL
+            
+            num_players = len(player_names)
+            required_roles = num_players + 3
+            assert len(role_pool) >= required_roles, \
+                f"Need at least {required_roles} roles for {num_players} players, have {len(role_pool)}"
+            
+            self.num_rounds = num_rounds
+            
+            # Select and distribute roles (non-deterministic)
+            player_roles, center_roles = select_roles_for_game(num_players, role_pool)
+            
+            # Sort player names alphabetically
+            sorted_names = sorted(player_names)
+            
+            # Create players - all use the same model
+            self.players = [
+                Player(name=name, model=model, original_role=role, current_role=role)
+                for name, role in zip(sorted_names, player_roles)
+            ]
         
         # Initialize game state
         self.state = GameState(
             players=self.players,
             center_cards=center_roles,
             original_assignments={p.name: p.original_role for p in self.players},
-            total_rounds=num_rounds
+            total_rounds=self.num_rounds
         )
         
         # Communication infrastructure
@@ -341,7 +386,7 @@ class ONUWGame:
         }
         
         # Active roles in this game (players + center)
-        active_roles = player_roles + center_roles
+        active_roles = [p.original_role for p in self.players] + list(center_roles)
         
         # Player agents
         self.agents: dict[str, PlayerAgent] = {}
@@ -357,23 +402,35 @@ class ONUWGame:
         # Log game initialization
         self.logger.info(f"Game {self.game_id} initialized with {len(self.players)} players")
         for p in self.players:
-            self.logger.info(f"  Player: {p.name} | Role: {p.original_role.value}")
+            self.logger.info(f"  Player: {p.name} | Model: {p.model} | Role: {p.original_role.value}")
         self.logger.info(f"  Center cards: {[r.value for r in center_roles]}")
+        if config:
+            self.logger.info(f"  Seed: {config.seed}")
         
-        self.event_log.log_event("GAME_INIT", {
+        init_data = {
             "game_id": self.game_id,
             "name": self.name,
-            "players": [{"name": p.name, "original_role": p.original_role.value, "current_role": p.current_role.value} for p in self.players],
+            "players": [{"name": p.name, "model": p.model, "original_role": p.original_role.value, "current_role": p.current_role.value} for p in self.players],
             "center_cards": [r.value for r in center_roles]
-        })
+        }
+        if config:
+            init_data["config"] = config.to_dict()
+        self.event_log.log_event("GAME_INIT", init_data)
         
         # Error tracking
         self.errors: list[dict] = []
         
         print(f"Game initialized with {len(self.players)} players:")
         for p in self.players:
-            print(f"  - {p.name}: {p.original_role.value}")
+            print(f"  - {p.name} ({p.model}): {p.original_role.value}")
         print(f"Center cards: {[r.value for r in center_roles]}")
+        if config:
+            print(f"Seed: {config.seed}")
+    
+    @classmethod
+    def from_config(cls, config: GameConfig, name: Optional[str] = None) -> "ONUWGame":
+        """Create a game from a GameConfig for deterministic, reproducible runs."""
+        return cls(config=config, name=name)
     
     def _track_error(self, error_type: str, details: dict) -> None:
         """Track an error for later analysis."""
@@ -445,7 +502,7 @@ class ONUWGame:
         other_players = [n for n in player_names if n != player.name]
         
         # Build context for this player's night action
-        context = {
+        context: dict[str, Any] = {
             "other_players": other_players,
             "player_names": player_names,
         }
@@ -466,85 +523,48 @@ class ONUWGame:
             # Insomniac sees their current card (after all swaps)
             context["current_role"] = player.current_role
         
-        # Get the player's action
-        action = await agent.run_night_phase(context)
-        
-        if action is None:
-            return None
-        
-        # Process the action and apply effects
-        result = None
-        
-        if action.action_type == "look_player":
-            # Seer looks at a player
-            target_name = action.targets[0]
-            target_player = self.state.get_player_by_name(target_name)
-            if target_player:
-                result = target_player.current_role.value
-                action.result = result
-                
-                # Tell the Seer what they saw
-                agent.add_game_event(f"You looked at {target_name}'s card: {result}")
-                
-        elif action.action_type == "look_center":
-            # Seer looks at two center cards
-            positions = [int(t.split("_")[1]) for t in action.targets]
-            roles = [self.state.center_cards[p].value for p in positions if 0 <= p < 3]
-            result = roles
+        # Get action plan (pre-determined if using config, else from LLM)
+        if self.game_setup and player.name in self.game_setup.night_action_plan:
+            # Use pre-determined action from seeded setup
+            plan = self.game_setup.night_action_plan[player.name]
+            
+            # Handle werewolf special case: if not alone, just acknowledge
+            if role == Role.WEREWOLF and context.get("other_werewolves"):
+                action = NightAction(
+                    player_name=player.name,
+                    original_role=role,
+                    action_type="acknowledge",
+                    targets=[]
+                )
+            else:
+                action = NightAction(
+                    player_name=player.name,
+                    original_role=role,
+                    action_type=plan.action_type,
+                    targets=list(plan.targets)
+                )
+            
+            # Execute the action and get result BEFORE informing the agent
+            result = await self._apply_night_action(player, action)
             action.result = result
             
-            # Tell the Seer what they saw
-            agent.add_game_event(f"You looked at center cards: {roles}")
+            # Build context with results for informational prompt
+            context["predetermined_action"] = action
+            context["action_result"] = result
             
-        elif action.action_type == "rob":
-            # Robber swaps with target and sees new card
-            target_name = action.targets[0]
-            target_player = self.state.get_player_by_name(target_name)
-            if target_player:
-                # Swap cards
-                old_role = player.current_role
-                new_role = target_player.current_role
-                self.state.swap_player_cards(player.name, target_name)
-                
-                result = new_role.value
-                action.result = result
-                
-                # Tell the Robber their new role
-                agent.add_game_event(f"You robbed {target_name} and are now the {new_role.value}")
-                
-                # Log the swap
-                await self._log_card_swap(player.name, target_name)
-                
-        elif action.action_type == "swap":
-            # Troublemaker swaps two other players
-            player1_name, player2_name = action.targets
-            self.state.swap_player_cards(player1_name, player2_name)
+            # Inform the agent about what happened (informational, no choice)
+            await agent.run_night_phase_informed(context)
             
-            result = f"Swapped {player1_name} and {player2_name}"
+        else:
+            # Legacy mode: get action from LLM (with tool calls)
+            action = await agent.run_night_phase(context)
+            
+            if action is None:
+                return None
+            
+            # Execute the action
+            result = await self._apply_night_action(player, action)
             action.result = result
-            
-            # Log the swap
-            await self._log_card_swap(player1_name, player2_name)
-            
-        elif action.action_type == "drunk_swap":
-            # Drunk swaps with center card (blind)
-            position = int(action.targets[0].split("_")[1])
-            if 0 <= position < 3:
-                self.state.swap_player_with_center(player.name, position)
-                result = f"Swapped with center_{position}"
-                action.result = result
-                
-                # Log the swap
-                await self._log_card_swap(player.name, f"center_{position}")
-                
-        elif action.action_type == "werewolf_look":
-            # Lone werewolf looks at center
-            position = int(action.targets[0].split("_")[1])
-            if 0 <= position < 3:
-                result = self.state.center_cards[position].value
-                action.result = result
-                
-                agent.add_game_event(f"You looked at center card {position}: {result}")
         
         # Log the night action
         self.event_log.log_event("NIGHT_ACTION", {
@@ -552,7 +572,7 @@ class ONUWGame:
             "role": role.value,
             "action": action.action_type,
             "targets": action.targets,
-            "result": result
+            "result": action.result
         })
         
         await self.broadcaster.broadcast(
@@ -563,13 +583,64 @@ class ONUWGame:
                     "role": role.value,
                     "action": action.action_type,
                     "targets": action.targets,
-                    "result": result
+                    "result": action.result
                 }
             )
         )
         
         self.state.night_actions.append(action)
         return action
+    
+    async def _apply_night_action(self, player: Player, action: NightAction) -> Optional[Any]:
+        """Apply a night action and return the result."""
+        agent = self.agents[player.name]
+        result = None
+        
+        if action.action_type == "look_player":
+            # Seer looks at a player
+            target_name = action.targets[0]
+            target_player = self.state.get_player_by_name(target_name)
+            if target_player:
+                result = target_player.current_role.value
+                
+        elif action.action_type == "look_center":
+            # Seer looks at two center cards
+            positions = [int(t.split("_")[1]) for t in action.targets]
+            roles = [self.state.center_cards[p].value for p in positions if 0 <= p < 3]
+            result = roles
+            
+        elif action.action_type == "rob":
+            # Robber swaps with target and sees new card
+            target_name = action.targets[0]
+            target_player = self.state.get_player_by_name(target_name)
+            if target_player:
+                new_role = target_player.current_role
+                self.state.swap_player_cards(player.name, target_name)
+                result = new_role.value
+                await self._log_card_swap(player.name, target_name)
+                
+        elif action.action_type == "swap":
+            # Troublemaker swaps two other players
+            player1_name, player2_name = action.targets
+            self.state.swap_player_cards(player1_name, player2_name)
+            result = f"Swapped {player1_name} and {player2_name}"
+            await self._log_card_swap(player1_name, player2_name)
+            
+        elif action.action_type == "drunk_swap":
+            # Drunk swaps with center card (blind)
+            position = int(action.targets[0].split("_")[1])
+            if 0 <= position < 3:
+                self.state.swap_player_with_center(player.name, position)
+                result = f"Swapped with center_{position}"
+                await self._log_card_swap(player.name, f"center_{position}")
+                
+        elif action.action_type == "werewolf_look":
+            # Lone werewolf looks at center
+            position = int(action.targets[0].split("_")[1])
+            if 0 <= position < 3:
+                result = self.state.center_cards[position].value
+        
+        return result
     
     async def _log_card_swap(self, location1: str, location2: str) -> None:
         """Log a card swap event."""

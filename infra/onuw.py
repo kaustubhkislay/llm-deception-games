@@ -266,7 +266,197 @@ DEFAULT_ROLE_POOL = [
 DEFAULT_DISCUSSION_ROUNDS = 5  # Number of discussion rounds before voting
 
 
-def select_roles_for_game(num_players: int, role_pool: list[Role] = None) -> tuple[list[Role], list[Role]]:
+@dataclass
+class GameConfig:
+    """Configuration for a deterministic game run."""
+    seed: int
+    models: list[str]  # One model per player
+    roles: list[Role]  # Exactly num_players + 3 roles
+    names: Optional[list[str]] = None  # Player names (defaults to DEFAULT_PLAYER_NAMES)
+    num_rounds: int = DEFAULT_DISCUSSION_ROUNDS
+    
+    def __post_init__(self):
+        if self.names is None:
+            self.names = DEFAULT_PLAYER_NAMES[:len(self.models)]
+        
+        num_players = len(self.models)
+        required_roles = num_players + 3
+        
+        assert len(self.names) == num_players, \
+            f"Number of names ({len(self.names)}) must match number of models ({num_players})"
+        assert len(self.roles) == required_roles, \
+            f"Need exactly {required_roles} roles for {num_players} players, got {len(self.roles)}"
+    
+    @property
+    def num_players(self) -> int:
+        return len(self.models)
+    
+    def to_dict(self) -> dict:
+        """Serialize config for logging/storage."""
+        return {
+            "seed": self.seed,
+            "models": self.models,
+            "roles": [r.value for r in self.roles],
+            "names": self.names,
+            "num_rounds": self.num_rounds,
+        }
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> "GameConfig":
+        """Deserialize config from dict."""
+        return cls(
+            seed=data["seed"],
+            models=data["models"],
+            roles=[Role(r) for r in data["roles"]],
+            names=data.get("names"),
+            num_rounds=data.get("num_rounds", DEFAULT_DISCUSSION_ROUNDS),
+        )
+
+
+@dataclass
+class NightActionPlan:
+    """Pre-determined night action for a player."""
+    player_name: str
+    original_role: Role
+    action_type: str  # "look_player", "look_center", "rob", "swap", "drunk_swap", "werewolf_look", "acknowledge"
+    targets: list[str]  # Target player names or "center_0", "center_1", "center_2"
+
+
+@dataclass
+class SeededGameSetup:
+    """
+    Deterministic game setup based on a seed.
+    
+    Given a GameConfig, this class uses the seed to deterministically assign:
+    - Roles to players and center
+    - Night action targets for each role
+    """
+    config: GameConfig
+    
+    # Computed assignments
+    player_roles: dict[str, Role] = field(default_factory=dict)  # name -> role
+    center_roles: list[Role] = field(default_factory=list)  # 3 center cards
+    night_action_plan: dict[str, NightActionPlan] = field(default_factory=dict)  # name -> action
+    
+    def __post_init__(self):
+        self._setup_game()
+    
+    def _setup_game(self) -> None:
+        """Use the seed to deterministically set up the game."""
+        rng = random.Random(self.config.seed)
+        
+        # Shuffle roles deterministically
+        all_roles = list(self.config.roles)
+        rng.shuffle(all_roles)
+        
+        # Assign to players and center
+        num_players = self.config.num_players
+        player_role_list = all_roles[:num_players]
+        self.center_roles = all_roles[num_players:]
+        
+        # Sort names alphabetically for consistent ordering
+        # names is guaranteed to be set by __post_init__
+        assert self.config.names is not None
+        sorted_names = sorted(self.config.names)
+        
+        # Assign roles to sorted names
+        self.player_roles = {
+            name: role for name, role in zip(sorted_names, player_role_list)
+        }
+        
+        # Plan night actions
+        self._plan_night_actions(rng, sorted_names)
+    
+    def _plan_night_actions(self, rng: random.Random, player_names: list[str]) -> None:
+        """Pre-determine all night action targets using the seeded RNG."""
+        
+        for player_name, role in self.player_roles.items():
+            other_players = [n for n in player_names if n != player_name]
+            
+            if role == Role.SEER:
+                # Seer: randomly choose between looking at player or center
+                if rng.random() < 0.5:
+                    # Look at one player
+                    target = rng.choice(other_players)
+                    self.night_action_plan[player_name] = NightActionPlan(
+                        player_name=player_name,
+                        original_role=role,
+                        action_type="look_player",
+                        targets=[target]
+                    )
+                else:
+                    # Look at two center cards
+                    positions = rng.sample([0, 1, 2], 2)
+                    self.night_action_plan[player_name] = NightActionPlan(
+                        player_name=player_name,
+                        original_role=role,
+                        action_type="look_center",
+                        targets=[f"center_{p}" for p in positions]
+                    )
+            
+            elif role == Role.ROBBER:
+                # Robber: choose one other player to rob
+                target = rng.choice(other_players)
+                self.night_action_plan[player_name] = NightActionPlan(
+                    player_name=player_name,
+                    original_role=role,
+                    action_type="rob",
+                    targets=[target]
+                )
+            
+            elif role == Role.TROUBLEMAKER:
+                # Troublemaker: choose two other players to swap
+                targets = rng.sample(other_players, 2)
+                self.night_action_plan[player_name] = NightActionPlan(
+                    player_name=player_name,
+                    original_role=role,
+                    action_type="swap",
+                    targets=targets
+                )
+            
+            elif role == Role.DRUNK:
+                # Drunk: choose center position
+                position = rng.randint(0, 2)
+                self.night_action_plan[player_name] = NightActionPlan(
+                    player_name=player_name,
+                    original_role=role,
+                    action_type="drunk_swap",
+                    targets=[f"center_{position}"]
+                )
+            
+            elif role == Role.WEREWOLF:
+                # Werewolf: Will determine at runtime if lone (then looks at center)
+                # Pre-plan the center position in case they're alone
+                position = rng.randint(0, 2)
+                self.night_action_plan[player_name] = NightActionPlan(
+                    player_name=player_name,
+                    original_role=role,
+                    action_type="werewolf_look",  # May become "acknowledge" if not alone
+                    targets=[f"center_{position}"]
+                )
+            
+            elif role == Role.MINION:
+                # Minion just acknowledges seeing werewolves
+                self.night_action_plan[player_name] = NightActionPlan(
+                    player_name=player_name,
+                    original_role=role,
+                    action_type="acknowledge",
+                    targets=[]
+                )
+            
+            elif role == Role.INSOMNIAC:
+                # Insomniac just acknowledges seeing their card
+                self.night_action_plan[player_name] = NightActionPlan(
+                    player_name=player_name,
+                    original_role=role,
+                    action_type="acknowledge",
+                    targets=[]
+                )
+            
+            # Passive roles (VILLAGER, HUNTER, TANNER) have no night action plan
+
+
+def select_roles_for_game(num_players: int, role_pool: Optional[list[Role]] = None) -> tuple[list[Role], list[Role]]:
     """
     Select and distribute roles for a game.
     

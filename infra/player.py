@@ -375,6 +375,177 @@ Use acknowledge to confirm you've seen this information."""
     return "<phase>NIGHT</phase>\nUnknown role - waiting for dawn."
 
 
+def get_night_phase_informed_prompt(player: Player, context: dict) -> str:
+    """
+    Generate an informational night phase prompt for pre-determined actions.
+    
+    Instead of asking the player to make a choice, this tells them what happened.
+    Used when running from a GameConfig with seeded, pre-determined actions.
+    """
+    role = player.original_role
+    action = context.get("predetermined_action")
+    result = context.get("action_result")
+    
+    if role == Role.VILLAGER:
+        return """<phase>NIGHT</phase>
+<your_role>VILLAGER</your_role>
+
+You have no night action. The night passes quietly for you.
+During the day, use your deduction skills to help find the werewolves."""
+
+    elif role == Role.HUNTER:
+        return """<phase>NIGHT</phase>
+<your_role>HUNTER</your_role>
+
+You have no night action. The night passes quietly for you.
+Remember: If you die in the vote, whoever you voted for also dies!"""
+
+    elif role == Role.TANNER:
+        return """<phase>NIGHT</phase>
+<your_role>TANNER</your_role>
+
+You have no night action. The night passes quietly for you.
+Remember: Your goal is to get yourself killed in the vote!"""
+
+    elif role == Role.WEREWOLF:
+        other_werewolves = context.get("other_werewolves", [])
+        if other_werewolves:
+            return f"""<phase>NIGHT - WEREWOLF</phase>
+<your_role>WEREWOLF</your_role>
+<teammate>{', '.join(other_werewolves)}</teammate>
+
+You wake up and see your fellow werewolf: {', '.join(other_werewolves)}.
+You exchange a knowing glance. During the day, coordinate your stories to avoid detection!"""
+        else:
+            # Lone werewolf looked at center
+            position = action.targets[0] if action and action.targets else "center_0"
+            pos_num = position.split("_")[1]
+            return f"""<phase>NIGHT - WEREWOLF (ALONE)</phase>
+<your_role>WEREWOLF</your_role>
+<status>You are the ONLY werewolf!</status>
+<center_peek>Position {pos_num}: {result}</center_peek>
+
+Since you're alone, you peek at center card position {pos_num} and see: {result}.
+This tells you that {result} is NOT held by any player - useful information for the day discussion!"""
+
+    elif role == Role.MINION:
+        werewolves = context.get("werewolves", [])
+        if werewolves:
+            return f"""<phase>NIGHT - MINION</phase>
+<your_role>MINION</your_role>
+<werewolves>{', '.join(werewolves)}</werewolves>
+
+You wake up and see that the werewolf player(s) are: {', '.join(werewolves)}.
+They don't know you exist or that you're helping them!
+
+Your job during the day: Protect them. Mislead the village. Take the fall if needed.
+You win if no werewolf is killed - even if YOU die!"""
+        else:
+            return """<phase>NIGHT - MINION</phase>
+<your_role>MINION</your_role>
+<werewolves>None!</werewolves>
+
+You wake up and see... NO werewolves! Both werewolf cards must be in the center.
+This is dangerous for you - the village wins if no one dies.
+
+Your job: Make sure SOMEONE gets voted out (but not yourself)!
+Cause chaos, make accusations, do whatever it takes to get the village to kill someone."""
+
+    elif role == Role.SEER:
+        if action and action.action_type == "look_player":
+            target = action.targets[0]
+            return f"""<phase>NIGHT - SEER</phase>
+<your_role>SEER</your_role>
+<action>Looked at {target}'s card</action>
+<result>{result}</result>
+
+You wake up and look at {target}'s card.
+You see that {target} is the {result}!
+
+This is powerful information. Use it wisely during the day - but be careful, cards may have been swapped AFTER you looked!"""
+        else:
+            # Looked at center
+            positions = [t.split("_")[1] for t in action.targets] if action else ["0", "1"]
+            roles_str = ", ".join(result) if isinstance(result, list) else str(result)
+            return f"""<phase>NIGHT - SEER</phase>
+<your_role>SEER</your_role>
+<action>Looked at center cards</action>
+<positions>{', '.join(positions)}</positions>
+<result>{roles_str}</result>
+
+You wake up and look at center card positions {' and '.join(positions)}.
+You see: {roles_str}
+
+These roles are NOT held by any player. This helps you know what's actually in play!"""
+
+    elif role == Role.ROBBER:
+        target = action.targets[0] if action else "someone"
+        return f"""<phase>NIGHT - ROBBER</phase>
+<your_role>ROBBER (was)</your_role>
+<action>Robbed {target}</action>
+<new_role>{result}</new_role>
+
+You wake up and swap your card with {target}'s card.
+You look at your new card and see: {result}
+
+You are now the {result}! This is your new role and team allegiance.
+Note: {target} now has your old Robber card (but doesn't know it).
+Warning: The Troublemaker acts after you, so your card might get swapped again!"""
+
+    elif role == Role.TROUBLEMAKER:
+        if action and len(action.targets) >= 2:
+            player1, player2 = action.targets[0], action.targets[1]
+        else:
+            player1, player2 = "Player1", "Player2"
+        return f"""<phase>NIGHT - TROUBLEMAKER</phase>
+<your_role>TROUBLEMAKER</your_role>
+<action>Swapped {player1} and {player2}</action>
+
+You wake up and swap {player1}'s card with {player2}'s card.
+You do NOT see what their cards are - you just know they've been swapped!
+
+Neither {player1} nor {player2} knows they've been swapped. This can cause chaos during the day when people's claims don't match up!"""
+
+    elif role == Role.DRUNK:
+        position = action.targets[0].split("_")[1] if action and action.targets else "0"
+        return f"""<phase>NIGHT - DRUNK</phase>
+<your_role>DRUNK (was)</your_role>
+<action>Swapped with center position {position}</action>
+
+You wake up in a daze and swap your card with center card position {position}.
+You do NOT see what your new card is!
+
+You have no idea what role you are now. You could be anything - even a Werewolf!
+During the day, you should probably mention you were the Drunk and see if anyone has info about the center cards."""
+
+    elif role == Role.INSOMNIAC:
+        current_role = context.get("current_role", Role.INSOMNIAC)
+        was_swapped = current_role != Role.INSOMNIAC
+        if was_swapped:
+            return f"""<phase>NIGHT - INSOMNIAC</phase>
+<your_role>INSOMNIAC (was)</your_role>
+<current_card>{current_role.value}</current_card>
+<swapped>YES</swapped>
+
+You wake up LAST (after all other night actions) and look at your card.
+Your card has been SWAPPED! You are now the {current_role.value}!
+
+Someone (the Robber or Troublemaker) changed your card during the night.
+This is your new role and team allegiance."""
+        else:
+            return f"""<phase>NIGHT - INSOMNIAC</phase>
+<your_role>INSOMNIAC</your_role>
+<current_card>INSOMNIAC</current_card>
+<swapped>NO</swapped>
+
+You wake up LAST (after all other night actions) and look at your card.
+Your card is still the Insomniac - no one swapped you!
+
+You can confidently claim Insomniac during the day and know you're still on the village team."""
+
+    return "<phase>NIGHT</phase>\nUnknown role - waiting for dawn."
+
+
 def get_day_phase_prompt(
     player: Player, 
     player_names: list[str], 
@@ -753,6 +924,42 @@ class PlayerAgent:
         
         print(f"[{self.player.name}] Night action: {action}")
         return action
+    
+    async def run_night_phase_informed(self, context: dict) -> None:
+        """
+        Run the night phase with pre-determined actions (informational only).
+        
+        Instead of asking the player to choose an action, this informs them
+        what happened during their night phase. Used when running from a
+        GameConfig with seeded, pre-determined actions.
+        
+        The player receives information and can respond/acknowledge, but
+        no tool calls are required since the action was already determined.
+        """
+        self._current_phase = "NIGHT"
+        role = self.player.original_role
+        
+        print(f"[{self.player.name}] Night phase (informed) - role: {role.value}")
+        
+        # Generate informational prompt
+        prompt = get_night_phase_informed_prompt(self.player, context)
+        
+        # For passive roles, just add the prompt to history (no LLM call needed)
+        if role in PASSIVE_ROLES:
+            self.player.chat_history.append(ChatMessage(role="user", content=prompt))
+            self.player.chat_history.append(ChatMessage(
+                role="assistant", 
+                content="I understand. I have no night action and will wait for the day phase."
+            ))
+            return
+        
+        # For active roles, call LLM to let them acknowledge/process the information
+        # No tools required - they just receive and acknowledge the information
+        response = await self._call_llm(prompt, tools=[], tool_choice=None)
+        
+        # The response is just their acknowledgment/processing - no action to return
+        # since the action was already predetermined and executed
+        print(f"  [{self.player.name}] Acknowledged night action")
     
     async def run_day_round(
         self,

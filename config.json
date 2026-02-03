@@ -1,0 +1,28 @@
+{
+  "seed": 12345,
+  "models": [
+    "gpt-5-mini",
+    "gpt-5-mini",
+    "gpt-5-mini",
+    "gpt-5-mini",
+    "gpt-5-mini"
+  ],
+  "roles": [
+    "WEREWOLF",
+    "WEREWOLF",
+    "SEER",
+    "ROBBER",
+    "TROUBLEMAKER",
+    "VILLAGER",
+    "VILLAGER",
+    "DRUNK"
+  ],
+  "names": [
+    "Alice",
+    "Bob",
+    "Charlie",
+    "Diana",
+    "Edward"
+  ],
+  "num_rounds": 5
+}
