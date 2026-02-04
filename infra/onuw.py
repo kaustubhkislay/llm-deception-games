@@ -18,6 +18,7 @@ class Role(Enum):
     DRUNK = "DRUNK"                 # Swap your card with a center card (don't look)
     INSOMNIAC = "INSOMNIAC"         # Look at your card at end of night (after swaps)
     HUNTER = "HUNTER"               # If you die, your vote target also dies
+    MASON = "MASON"                 # See the other mason (if not in center)
     
     # Werewolf Team  
     WEREWOLF = "WEREWOLF"           # See other werewolves; if alone, may look at center
@@ -29,7 +30,7 @@ class Role(Enum):
 
 # Team affiliations
 VILLAGE_TEAM = {Role.VILLAGER, Role.SEER, Role.ROBBER, Role.TROUBLEMAKER, 
-                Role.DRUNK, Role.INSOMNIAC, Role.HUNTER}
+                Role.DRUNK, Role.INSOMNIAC, Role.HUNTER, Role.MASON}
 WEREWOLF_TEAM = {Role.WEREWOLF, Role.MINION}
 NEUTRAL_TEAM = {Role.TANNER}
 
@@ -48,11 +49,12 @@ def get_team(role: Role) -> str:
 NIGHT_ACTION_ORDER = [
     Role.WEREWOLF,      # 1. Werewolves wake, see each other (or peek center if alone)
     Role.MINION,        # 2. Minion sees werewolves
-    Role.SEER,          # 3. Seer looks at one player OR two center cards
-    Role.ROBBER,        # 4. Robber swaps and looks at new card
-    Role.TROUBLEMAKER,  # 5. Troublemaker swaps two other players
-    Role.DRUNK,         # 6. Drunk swaps with center (blind)
-    Role.INSOMNIAC,     # 7. Insomniac looks at own card
+    Role.MASON,         # 3. Masons wake, see each other (if other mason not in center)
+    Role.SEER,          # 4. Seer looks at one player OR two center cards
+    Role.ROBBER,        # 5. Robber swaps and looks at new card
+    Role.TROUBLEMAKER,  # 6. Troublemaker swaps two other players
+    Role.DRUNK,         # 7. Drunk swaps with center (blind)
+    Role.INSOMNIAC,     # 8. Insomniac looks at own card
 ]
 
 # Roles with no night action
@@ -475,6 +477,15 @@ class SeededGameSetup:
             
             elif role == Role.MINION:
                 # Minion just acknowledges seeing werewolves
+                self.night_action_plan[player_name] = NightActionPlan(
+                    player_name=player_name,
+                    original_role=role,
+                    action_type="acknowledge",
+                    targets=[]
+                )
+            
+            elif role == Role.MASON:
+                # Mason just acknowledges seeing other mason (if any)
                 self.night_action_plan[player_name] = NightActionPlan(
                     player_name=player_name,
                     original_role=role,

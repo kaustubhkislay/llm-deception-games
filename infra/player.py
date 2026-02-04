@@ -25,6 +25,7 @@ ROLE_DESCRIPTIONS = {
     Role.DRUNK: "DRUNK: Wake up and swap your card with a center card. You DON'T see your new card.",
     Role.INSOMNIAC: "INSOMNIAC: Wake up LAST and look at your own card (to see if it was swapped).",
     Role.HUNTER: "HUNTER: No night action. If you die, the player you voted for also dies.",
+    Role.MASON: "MASON: Wake up and see the other Mason. If the other Mason is in the center, you see no one.",
     # Werewolf Team
     Role.WEREWOLF: "WEREWOLF: Wake up and see other werewolves. If you're the ONLY werewolf, you may look at one center card.",
     Role.MINION: "MINION: Wake up and see who the werewolves are. They don't know you exist. You win with werewolves, unless there are no werewolves, in which case you win if you are killed in the vote.",
@@ -36,6 +37,7 @@ ROLE_DESCRIPTIONS = {
 NIGHT_ACTION_ORDER_DESCRIPTIONS = {
     Role.WEREWOLF: "Werewolf(s) - see each other, or if alone, may peek at center",
     Role.MINION: "Minion - sees the werewolves",
+    Role.MASON: "Mason(s) - see each other (if other mason not in center)",
     Role.SEER: "Seer - looks at one player OR two center cards",
     Role.ROBBER: "Robber - swaps with a player and sees new card",
     Role.TROUBLEMAKER: "Troublemaker - swaps two other players' cards",
@@ -45,7 +47,7 @@ NIGHT_ACTION_ORDER_DESCRIPTIONS = {
 
 # Canonical night action order
 NIGHT_ACTION_ORDER_LIST = [
-    Role.WEREWOLF, Role.MINION, Role.SEER, Role.ROBBER, 
+    Role.WEREWOLF, Role.MINION, Role.MASON, Role.SEER, Role.ROBBER, 
     Role.TROUBLEMAKER, Role.DRUNK, Role.INSOMNIAC
 ]
 
@@ -55,7 +57,7 @@ def get_game_rules(active_roles: list[Role]) -> str:
     
     # Categorize active roles by team
     village_roles = [r for r in [Role.VILLAGER, Role.SEER, Role.ROBBER, Role.TROUBLEMAKER, 
-                                  Role.DRUNK, Role.INSOMNIAC, Role.HUNTER] if r in active_set]
+                                  Role.DRUNK, Role.INSOMNIAC, Role.HUNTER, Role.MASON] if r in active_set]
     werewolf_roles = [r for r in [Role.WEREWOLF, Role.MINION] if r in active_set]
     neutral_roles = [r for r in [Role.TANNER] if r in active_set]
     
@@ -190,6 +192,16 @@ Your special ability: If you are killed in the vote, the player YOU voted for al
 The hunter wins if at least one werewolf is killed.
 Remember: someone might have swapped your role during the night! If you are no longer the hunter, your ability does not apply.
 """,
+        Role.MASON: """
+=== YOUR STARTING ROLE: MASON ===
+
+During the night, you will wake up and see who the other Mason is.
+If the other Mason card is in the center (not dealt to a player), you won't see anyone.
+
+There are always exactly 2 Mason cards in play. Use this information wisely during discussion!
+The mason wins if at least one werewolf is killed.
+Remember: someone might have swapped your role during the night!
+""",
         Role.WEREWOLF: """
 === YOUR STARTING ROLE: WEREWOLF ===
 
@@ -288,6 +300,23 @@ They don't know you exist!"""
 
 You wake up and see... NO werewolves! Both werewolf cards must be in the center.
 This means you win if you are killed in the vote."""
+
+    elif role == Role.MASON:
+        other_masons = context.get("other_masons", [])
+        if other_masons:
+            return f"""<phase>NIGHT - MASON</phase>
+<your_role>MASON</your_role>
+<other_mason>{other_masons[0]}</other_mason>
+
+You wake up and see that the other Mason is: {other_masons[0]}.
+You can trust each other during the day discussion!"""
+        else:
+            return """<phase>NIGHT - MASON</phase>
+<your_role>MASON</your_role>
+<other_mason>None!</other_mason>
+
+You wake up but don't see another Mason. The other Mason card must be in the center.
+You are the only Mason among the players."""
 
     elif role == Role.SEER:
         if action and action.action_type == "look_player":

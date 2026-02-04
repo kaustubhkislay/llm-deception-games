@@ -480,6 +480,12 @@ class ONUWGame:
             werewolves = [p.name for p in self.players if p.original_role == Role.WEREWOLF]
             context["werewolves"] = werewolves
             
+        elif role == Role.MASON:
+            # Mason sees the other mason (if not in center)
+            other_masons = [p.name for p in self.players 
+                          if p.original_role == Role.MASON and p.name != player.name]
+            context["other_masons"] = other_masons
+            
         elif role == Role.INSOMNIAC:
             # Insomniac sees their current card (after all swaps)
             context["current_role"] = player.current_role
