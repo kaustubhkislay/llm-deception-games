@@ -93,7 +93,8 @@ def get_game_rules(active_roles: list[Role]) -> str:
 - VILLAGE TEAM wins if at least one Werewolf player is killed
 - WEREWOLF TEAM wins if no Werewolf player is killed
 {"- If there are NO werewolves among players (all in center), Minion wins if they are killed, otherwise Village wins" if Role.MINION in active_set else ""}
-- In case of a tied vote, ALL tied players die"""
+- In case of a tied vote, ALL tied players die
+- There is NO option to abstain or vote for "no one" - you MUST vote for another player"""
     
     if Role.TANNER in active_set:
         win_conditions += "\n- TANNER wins if the Tanner is killed (this overrides all other win conditions)"
@@ -469,8 +470,8 @@ You must either:
 If you send a message, include ONLY what you want to say out loud. No labels, no reasoning - just your actual words."""
 
 
-def get_voting_phase_prompt(player: Player, player_names: list[str], messages: Optional[list[PublicMessage]] = None) -> str:
-    """Generate the prompt for the voting phase."""
+def _build_voting_context(player: Player, player_names: list[str], messages: Optional[list[PublicMessage]] = None) -> str:
+    """Build the context portion of the voting phase prompt."""
     other_players = [p for p in player_names if p != player.name]
     
     # Summarize key claims from discussion
@@ -492,7 +493,31 @@ In case of a tie, ALL tied players die.
 - If no Werewolf dies: Werewolf team wins  
 - If Tanner dies: Tanner wins
 
-You must vote for another player. Use cast_vote to submit your vote."""
+You must vote for another player. There is NO option to abstain or vote for "no one" - you MUST choose one of the listed players."""
+
+
+def get_voting_thinking_prompt(player: Player, player_names: list[str], messages: Optional[list[PublicMessage]] = None) -> str:
+    """Generate the thinking prompt for the voting phase (no tools)."""
+    context = _build_voting_context(player, player_names, messages)
+    
+    return f"""{context}
+
+THINKING PHASE: Before casting your vote, analyze who should be eliminated.
+
+Consider:
+1. What role claims were made? Do any contradict each other?
+2. Who might be a Werewolf based on the discussion?
+3. What is YOUR current win condition (based on your ending role, which may have been swapped)?
+4. Who should you vote for to achieve your win condition?
+
+Think through this carefully. After you respond, you'll be asked to cast your vote."""
+
+
+def get_voting_action_prompt() -> str:
+    """Generate the action prompt for the voting phase (with tools)."""
+    return """Now cast your vote.
+
+Use cast_vote to vote for the player you want to eliminate. You MUST vote for one of the other players - there is no option to abstain."""
 
 
 class PlayerAgent:
@@ -720,14 +745,28 @@ class PlayerAgent:
         return None
     
     async def run_voting_phase(self, player_names: list[str], messages: Optional[list[PublicMessage]] = None) -> tuple[Optional[str], Optional[str]]:
-        """Run the voting phase and return (vote_target, reasoning) tuple."""
+        """
+        Run the voting phase and return (vote_target, reasoning) tuple.
+        
+        Uses a two-step process:
+        1. First, prompt the model to think (no tools) - generates reasoning
+        2. Then, prompt the model to cast vote (with tools)
+        """
         self._current_phase = "VOTING"
         print(f"[{self.player.name}] Starting voting phase")
         
-        prompt = get_voting_phase_prompt(self.player, player_names, messages)
-        response = await self._call_llm(prompt, VOTING_TOOLS, tool_choice="required")
+        # Step 1: Thinking phase (no tools)
+        thinking_prompt = get_voting_thinking_prompt(self.player, player_names, messages)
         
-        reasoning = response.content
+        print(f"  [{self.player.name}] Thinking about vote...")
+        thinking_response = await self._call_llm(thinking_prompt, tools=[], tool_choice=None)
+        reasoning = thinking_response.content
+        
+        # Step 2: Action phase (with tools)
+        action_prompt = get_voting_action_prompt()
+        
+        print(f"  [{self.player.name}] Casting vote...")
+        response = await self._call_llm(action_prompt, VOTING_TOOLS, tool_choice="required")
         
         if response.tool_calls:
             for tool_call in response.tool_calls:
