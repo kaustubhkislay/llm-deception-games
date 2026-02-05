@@ -394,13 +394,18 @@ def print_results(results: BatchResults, error_log_file: Path | None = None):
     print(f"\nTokens: {total_tokens:,} total ({summary['total_prompt_tokens']:,} in / {summary['total_completion_tokens']:,} out)")
 
 
-def save_results(results: BatchResults) -> Path:
+def save_results(results: BatchResults, name: str | None = None) -> Path:
     """Save detailed results to JSON file."""
     results_dir = Path(__file__).parent.parent / "results"
     results_dir.mkdir(exist_ok=True)
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_file = results_dir / f"08_batch_{timestamp}.json"
+    if name:
+        # Sanitize name for filename
+        safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
+        results_file = results_dir / f"08_batch_{safe_name}_{timestamp}.json"
+    else:
+        results_file = results_dir / f"08_batch_{timestamp}.json"
     
     # Convert to serializable format
     output = {
@@ -480,7 +485,7 @@ def main():
     ))
     
     print_results(results)
-    save_results(results)
+    save_results(results, name=args.name)
 
 
 if __name__ == "__main__":

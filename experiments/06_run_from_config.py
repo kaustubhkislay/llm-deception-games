@@ -29,7 +29,7 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from infra.onuw import GameConfig, Role, DEFAULT_PLAYER_NAMES, DEFAULT_ROLE_POOL
+from infra.onuw import GameConfig, ModelConfig, Role, DEFAULT_PLAYER_NAMES, DEFAULT_ROLE_POOL
 from infra.game_engine import ONUWGame
 from infra.events import reset_broadcaster, set_web_queue
 from web.app import app, set_game, get_event_queue
@@ -77,9 +77,12 @@ def create_config(
     if names is None:
         names = DEFAULT_PLAYER_NAMES[:num_players]
     
+    # Convert model strings to ModelConfig objects
+    model_configs = [ModelConfig(model=m) for m in models]
+    
     return GameConfig(
         seed=seed,
-        models=models,
+        models=model_configs,
         roles=roles,
         names=names,
         num_rounds=num_rounds,

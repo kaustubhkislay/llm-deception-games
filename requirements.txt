@@ -17,3 +17,7 @@ python-dotenv>=1.0.0
 numpy>=1.24.0
 scipy>=1.10.0
 matplotlib>=3.7.0
+
+# For uploading results to Docent
+docent-python
+tqdm>=4.66.0

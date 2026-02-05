@@ -83,15 +83,12 @@ class ModelConfig:
     """Configuration for a model including reasoning settings."""
     model: str
     reasoning_effort: Optional[str] = None  # "low", "medium", "high", or None for no reasoning
-    reasoning_summary: Optional[str] = None  # "auto", "concise", "detailed", or None
     
     def to_dict(self) -> dict:
         """Serialize to dict."""
         d: dict = {"model": self.model}
         if self.reasoning_effort is not None:
             d["reasoning_effort"] = self.reasoning_effort
-        if self.reasoning_summary is not None:
-            d["reasoning_summary"] = self.reasoning_summary
         return d
     
     @classmethod
@@ -102,17 +99,13 @@ class ModelConfig:
         return cls(
             model=data["model"],
             reasoning_effort=data.get("reasoning_effort"),
-            reasoning_summary=data.get("reasoning_summary"),
         )
     
     def get_reasoning_settings(self) -> Optional[dict]:
         """Get reasoning settings dict for LLM API, or None if no reasoning."""
         if self.reasoning_effort is None:
             return None
-        settings: dict = {"effort": self.reasoning_effort}
-        if self.reasoning_summary is not None:
-            settings["summary"] = self.reasoning_summary
-        return settings
+        return {"effort": self.reasoning_effort}
 
 
 @dataclass

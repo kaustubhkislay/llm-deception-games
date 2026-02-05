@@ -6,24 +6,24 @@ import argparse
 from pathlib import Path
 
 
-# Default template config for vanilla ONUW with gpt-5-mini
+# Default template config for vanilla ONUW with gpt-5
 DEFAULT_TEMPLATE = {
     "models": [
-        {"model": "gpt-5-mini", "reasoning_effort": "medium", "reasoning_summary": "detailed"},
-        {"model": "gpt-5-mini", "reasoning_effort": "medium", "reasoning_summary": "detailed"},
-        {"model": "gpt-5-mini", "reasoning_effort": "medium", "reasoning_summary": "detailed"},
-        {"model": "gpt-5-mini", "reasoning_effort": "medium", "reasoning_summary": "detailed"},
-        {"model": "gpt-5-mini", "reasoning_effort": "medium", "reasoning_summary": "detailed"}
+        {"model": "gpt-5", "reasoning_effort": "medium"},
+        {"model": "gpt-5", "reasoning_effort": "medium"},
+        {"model": "gpt-5", "reasoning_effort": "medium"},
+        {"model": "gpt-5", "reasoning_effort": "medium"},
+        {"model": "gpt-5", "reasoning_effort": "medium"}
     ],
     "roles": [
         "WEREWOLF",
         "WEREWOLF",
+        "MINION",
         "SEER",
         "ROBBER",
         "TROUBLEMAKER",
+        "DRUNK",
         "VILLAGER",
-        "VILLAGER",
-        "DRUNK"
     ],
     "names": [
         "Alice",
@@ -82,7 +82,7 @@ def main():
     parser.add_argument(
         "--output-dir", "-o",
         type=str,
-        default="settings/vanilla onuw gpt5mini",
+        default="settings/onuw_WwWwMiSeRbTrDrVi_gpt5med",
         help="Output directory for config files"
     )
     parser.add_argument(

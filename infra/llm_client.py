@@ -25,7 +25,6 @@ class LLMResponse:
     content: Optional[str]
     tool_calls: Optional[list[dict]]
     raw_response: dict
-    reasoning_summary: Optional[str] = None
 
 
 def _compute_cache_key(
@@ -221,9 +220,8 @@ class CachedLLMClient:
             self._total_prompt_tokens += response.usage.input_tokens
             self._total_completion_tokens += response.usage.output_tokens
         
-        # Parse response output to extract content, reasoning summary, and tool calls
+        # Parse response output to extract content and tool calls
         content = None
-        reasoning_summary = None
         tool_calls_list = []
         
         for item in response.output:
@@ -232,15 +230,6 @@ class CachedLLMClient:
                 for content_item in item.content:
                     if content_item.type == "output_text":
                         content = content_item.text
-            elif item.type == "reasoning":
-                # Extract reasoning summary if available
-                if hasattr(item, 'summary') and item.summary:
-                    summary_texts = []
-                    for summary_item in item.summary:
-                        if hasattr(summary_item, 'text'):
-                            summary_texts.append(summary_item.text)
-                    if summary_texts:
-                        reasoning_summary = "\n".join(summary_texts)
             elif item.type == "function_call":
                 # Extract function call - convert fc_ back to call_ for compatibility
                 call_id = item.call_id
@@ -255,17 +244,9 @@ class CachedLLMClient:
                     }
                 })
         
-        # Use reasoning summary as content if no message content but reasoning exists
-        if content is None and reasoning_summary:
-            content = reasoning_summary
-        elif content and reasoning_summary:
-            # Prepend reasoning to content
-            content = reasoning_summary + "\n\n" + content
-        
         # Convert to dict for caching
         response_dict = {
             "content": content,
-            "reasoning_summary": reasoning_summary,
             "tool_calls": tool_calls_list if tool_calls_list else None,
             "status": response.status,
         }
@@ -282,7 +263,6 @@ class CachedLLMClient:
             content=response_dict.get("content"),
             tool_calls=response_dict.get("tool_calls"),
             raw_response=response_dict,
-            reasoning_summary=response_dict.get("reasoning_summary"),
         )
     
     @property

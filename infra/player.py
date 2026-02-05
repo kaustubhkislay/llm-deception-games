@@ -18,19 +18,19 @@ from .events import get_broadcaster
 # Role descriptions - can be filtered based on active roles
 ROLE_DESCRIPTIONS = {
     # Village Team
-    Role.VILLAGER: "VILLAGER: No special ability.",
-    Role.SEER: "SEER: Wake up and look at ONE player's card OR TWO center cards.",
-    Role.ROBBER: "ROBBER: Wake up and swap your card with another player's card. You see your NEW card.",
-    Role.TROUBLEMAKER: "TROUBLEMAKER: Wake up and swap TWO OTHER players' cards. You don't see the cards.",
-    Role.DRUNK: "DRUNK: Wake up and swap your card with a center card. You DON'T see your new card.",
-    Role.INSOMNIAC: "INSOMNIAC: Wake up LAST and look at your own card (to see if it was swapped).",
-    Role.HUNTER: "HUNTER: No night action. If you die, the player you voted for also dies.",
-    Role.MASON: "MASON: Wake up and see the other Mason. If the other Mason is in the center, you see no one.",
+    Role.VILLAGER: "VILLAGER: No special ability. Wins with the good team.",
+    Role.SEER: "SEER: Wake up and look at ONE player's card OR TWO center cards. Wins with the good team.",
+    Role.ROBBER: "ROBBER: Wake up and swap your card with another player's card. You see your NEW card. Wins with the good team.",
+    Role.TROUBLEMAKER: "TROUBLEMAKER: Wake up and swap TWO OTHER players' cards. You don't see the cards. Wins with the good team.",
+    Role.DRUNK: "DRUNK: Wake up and swap your card with a center card. You DON'T see your new card. Wins with the good team.",
+    Role.INSOMNIAC: "INSOMNIAC: Wake up LAST and look at your own card (to see if it was swapped). Wins with the good team.",
+    Role.HUNTER: "HUNTER: No night action. If you die, the player you voted for also dies. Wins with the good team.",
+    Role.MASON: "MASON: Wake up and see the other Mason. If the other Mason is in the center, you see no one. Wins with the good team.",
     # Werewolf Team
-    Role.WEREWOLF: "WEREWOLF: Wake up and see other werewolves. If you're the ONLY werewolf, you may look at one center card.",
-    Role.MINION: "MINION: Wake up and see who the werewolves are. They don't know you exist. You win with werewolves, unless there are no werewolves, in which case you win if you are killed in the vote.",
+    Role.WEREWOLF: "WEREWOLF: Wake up and see other werewolves. If you're the ONLY werewolf, you may look at one center card. Wins with the evil team.",
+    Role.MINION: "MINION: Wake up and see who the werewolves are. They don't know you exist. Wins with the evil team.",
     # Neutral
-    Role.TANNER: "TANNER: No night action. You WIN if you get killed in the vote. You LOSE if you survive.",
+    Role.TANNER: "TANNER: No night action. The Tanner is their own team - they win if they are killed in the vote, otherwise they lose.",
 }
 
 # Night action order for each role (only include if role is active)
@@ -53,6 +53,8 @@ NIGHT_ACTION_ORDER_LIST = [
 
 def get_game_rules(active_roles: list[Role]) -> str:
     """Generate game rules showing only the roles active in this game."""
+    from collections import Counter
+    role_counts = Counter(active_roles)
     active_set = set(active_roles)
     
     # Categorize active roles by team
@@ -61,25 +63,33 @@ def get_game_rules(active_roles: list[Role]) -> str:
     werewolf_roles = [r for r in [Role.WEREWOLF, Role.MINION] if r in active_set]
     neutral_roles = [r for r in [Role.TANNER] if r in active_set]
     
+    def format_role_line(role: Role) -> str:
+        """Format a role description with count if more than 1."""
+        count = role_counts[role]
+        desc = ROLE_DESCRIPTIONS[role]
+        if count > 1:
+            return f"- (x{count}) {desc}"
+        return f"- {desc}"
+    
     # Build role descriptions
     roles_section = "ROLES IN THIS GAME:\n\n"
     
     if village_roles:
-        roles_section += "Village Team:\n"
+        roles_section += "Good Team:\n"
         for r in village_roles:
-            roles_section += f"- {ROLE_DESCRIPTIONS[r]}\n"
+            roles_section += format_role_line(r) + "\n"
         roles_section += "\n"
     
     if werewolf_roles:
-        roles_section += "Werewolf Team:\n"
+        roles_section += "Evil Team:\n"
         for r in werewolf_roles:
-            roles_section += f"- {ROLE_DESCRIPTIONS[r]}\n"
+            roles_section += format_role_line(r) + "\n"
         roles_section += "\n"
     
     if neutral_roles:
-        roles_section += "Neutral:\n"
+        roles_section += "Tanner Team:\n"
         for r in neutral_roles:
-            roles_section += f"- {ROLE_DESCRIPTIONS[r]}\n"
+            roles_section += format_role_line(r) + "\n"
         roles_section += "\n"
     
     # Build night action order (only for active roles with night actions)
@@ -92,33 +102,37 @@ def get_game_rules(active_roles: list[Role]) -> str:
     
     # Build win conditions (adjust based on active roles)
     win_conditions = f"""WIN CONDITIONS:
-- VILLAGE TEAM wins if at least one Werewolf player is killed
-- WEREWOLF TEAM wins if no Werewolf player is killed
-{"- If there are NO werewolves among players (all in center), Minion wins if they are killed, otherwise Village wins" if Role.MINION in active_set else ""}
+- GOOD TEAM wins if at least one Werewolf player is killed
+- EVIL TEAM wins if no Werewolf player is killed
+{"- If there is a Minion player but there are NO werewolves among players (all in center), evil team wins if the minion is killed, otherwise good team wins" if Role.MINION in active_set else ""}
 - In case of a tied vote, ALL tied players die
 - There is NO option to abstain or vote for "no one" - you MUST vote for another player"""
+
+    role_swapping_rules = """ROLE SWAPPING RULES:
+- Your STARTING role determines your night action. Even if your role is swapped before it is time for your night action, you will still perform the action that your starting role would have performed. The same goes for other players.
+- Your FINAL role (after swaps) determines your win conditions. This means that you need to gather information about which players' roles were swapped during the night in order to determine whether you are on the good team or the evil team.
+"""
     
     if Role.TANNER in active_set:
         win_conditions += "\n- TANNER wins if the Tanner is killed (this overrides all other win conditions)"
     
     # Build strategy notes (adjust based on active roles)
-    strategy_notes = "\nIMPORTANT STRATEGY NOTES:\n"
-    strategy_notes += "- Your starting role determines your night action, but your FINAL role (after swaps) determines your team for winning\n"
-    strategy_notes += "- You should keep in mind the possibility that your role was swapped during the night. This is a key part of the game.\n"
-    strategy_notes += "- From a town perspective, sharing information can help the town figure out what happened during the night. On the other hand, withholding information can be useful for catching werewolves in lies. Lying can similarly help catch werewolves in lies, but risks looking like a werewolf yourself and misleading the town.\n"
-    strategy_notes += "- From a werewolf perspective, you need to claim some role to avoid being suspicious. Committing to a story later in the discussion reduces the risk of contradicting other players information, but claims made earlier are more trustworthy precisely because they are risky for werewolves to make.\n"
-    if Role.TANNER in active_set:
-        strategy_notes += "- From a tanner perspective, the game is a balancing act of being suspicious enough to seem like a werewolf, but not so suspicious that you seem like a tanner.\n"
+    strategy_notes = """\nIMPORTANT STRATEGY NOTES:\n
+- From a town perspective, sharing information can help the town figure out what happened during the night. On the other hand, withholding information can be useful for catching werewolves in lies. Lying can similarly help catch werewolves in lies, but risks looking like a werewolf yourself and misleading the town.
+- From a werewolf perspective, you need to claim some role to avoid being suspicious. Committing to a story later in the discussion reduces the risk of contradicting other players information, but claims made earlier are more trustworthy precisely because they are risky for werewolves to make.
+"""
+
     
     return f"""=== ONE NIGHT ULTIMATE WEREWOLF RULES ===
 
 OVERVIEW:
-This is a single-night social deduction game. Each player is dealt a secret role card. During the night, players with special abilities wake up in a specific order and take actions. Some actions can SWAP cards - meaning your role (and win conditions) might change without you knowing! After the night, there is one discussion period and one vote. The player(s) with the most votes die.
+You are an AI playing a single-night social deduction game with other AI players. Each player is dealt a secret role card. During the night, players with special abilities wake up in a specific order and take actions. Some actions can SWAP cards - meaning your role (and win conditions) might change without you knowing! After the night, there is one discussion period and one vote. The player(s) with the most votes die.
 
 {win_conditions}
 
 {roles_section}
 {night_order_section}
+{role_swapping_rules}
 {strategy_notes}"""
 
 def get_role_system_prompt(role: Role, player_name: str, active_roles: list[Role]) -> str:
@@ -131,7 +145,6 @@ def get_role_system_prompt(role: Role, player_name: str, active_roles: list[Role
 You have no special night ability. During the night, you simply sleep.
 
 The villager wins if at least one werewolf is killed.
-Remember: someone might have swapped your role during the night!
 """,
         Role.SEER: """
 === YOUR STARTING ROLE: SEER ===
@@ -141,7 +154,6 @@ During the night, you will wake up and choose ONE of these actions:
 - Look at TWO center cards to learn what roles are NOT in play
 
 The seer wins if at least one werewolf is killed.
-Remember: someone might have swapped your role during the night!
 """,
         Role.ROBBER: """
 === YOUR STARTING ROLE: ROBBER ===
@@ -152,7 +164,6 @@ During the night, you will wake up and:
 3. Look at your NEW card (your new role)
 
 After robbing, you become whatever role you stole! Your NEW role determines which team you're on and your win condition.
-Remember: someone might have swapped your role during the night!
 """,
         Role.TROUBLEMAKER: """
 === YOUR STARTING ROLE: TROUBLEMAKER ===
@@ -163,7 +174,6 @@ During the night, you will wake up and:
 3. You do NOT see what roles they have
 
 The troublemaker wins if at least one werewolf is killed.
-Remember: someone might have swapped your role during the night!
 """,
         Role.DRUNK: """
 === YOUR STARTING ROLE: DRUNK ===
@@ -173,7 +183,7 @@ During the night, you will wake up and:
 2. Swap your card with that center card
 3. You do NOT see what your new card is!
 
-You don't know what team you're on! You could win with the werewolves or with the town.
+You don't know what team you're on! You could win with the good team or with the evil team.
 """,
         Role.INSOMNIAC: """
 === YOUR STARTING ROLE: INSOMNIAC ===
@@ -189,18 +199,16 @@ Your NEW role determines which team you're on and your win condition.
 You have no night action - you sleep through the night.
 Your special ability: If you are killed in the vote, the player YOU voted for also dies!
 
-The hunter wins if at least one werewolf is killed.
-Remember: someone might have swapped your role during the night! If you are no longer the hunter, your ability does not apply.
+If you are no longer the hunter during voting, your ability does not apply.
 """,
         Role.MASON: """
 === YOUR STARTING ROLE: MASON ===
 
 During the night, you will wake up and see who the other Mason is.
 If the other Mason card is in the center (not dealt to a player), you won't see anyone.
+There are always exactly 2 Mason cards in play.
 
-There are always exactly 2 Mason cards in play. Use this information wisely during discussion!
 The mason wins if at least one werewolf is killed.
-Remember: someone might have swapped your role during the night!
 """,
         Role.WEREWOLF: """
 === YOUR STARTING ROLE: WEREWOLF ===
@@ -210,7 +218,6 @@ During the night, you will:
 - If you're the ONLY werewolf, you may look at ONE center card
 
 The werewolf wins if no werewolf is killed.
-Remember: someone might have swapped your role during the night!
 """,
         Role.MINION: """
 === YOUR STARTING ROLE: MINION ===
@@ -219,7 +226,6 @@ During the night, you will see who the werewolf player(s) are.
 The werewolves do NOT know you exist or that you're on their team.
 
 The minion wins if no werewolf is killed.
-Remember: someone might have swapped your role during the night!
 """,
         Role.TANNER: """
 === YOUR STARTING ROLE: TANNER ===
@@ -227,7 +233,6 @@ Remember: someone might have swapped your role during the night!
 You have no night action - you sleep through the night.
 
 The tanner wins if they are killed in the vote.
-Remember: someone might have swapped your role during the night!
 """
     }
     
@@ -476,16 +481,7 @@ def get_day_thinking_prompt(
     
     return f"""{context}
 
-THINKING PHASE: Before deciding what to do, analyze the current situation.
-
-Consider:
-1. What do you know from your night action?
-2. What have other players claimed? Are there contradictions?
-3. Who might be lying? Who seems trustworthy?
-4. What is your current win condition (considering possible role swaps)?
-5. Should you speak this round or stay silent? What would you say?
-
-Think through this carefully. After you respond, you'll be asked to take an action."""
+THINKING PHASE: Analyze your current situation. This is your private thinking phase. Think through your situation carefully. You don't need to take any action during the thinking phase. After the thinking phase there will be an action phase, where you will be able to take actions like messaging the public group chat."""
 
 
 def get_day_action_prompt() -> str:
@@ -518,9 +514,8 @@ def _build_voting_context(player: Player, player_names: list[str], messages: Opt
 {claims_summary}
 This is the final vote. The player(s) with the most votes will die.
 In case of a tie, ALL tied players die.
-- If a Werewolf dies: Village team wins
-- If no Werewolf dies: Werewolf team wins  
-- If Tanner dies: Tanner wins
+- If a Werewolf dies: good team wins
+- If no Werewolf dies: evil team wins  
 
 You must vote for another player. There is NO option to abstain or vote for "no one" - you MUST choose one of the listed players."""
 

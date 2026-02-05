@@ -301,8 +301,8 @@ class ONUWGame:
             config: GameConfig with seed, models, roles, names, num_rounds
             name: Optional display name for this game
         """
-        # Set up game logger first
-        self.game_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Set up game logger first - include seed in game_id for uniqueness in parallel runs
+        self.game_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{config.seed}"
         self.logger = setup_game_logger(self.game_id)
         self.event_log = GameEventLog(self.game_id)
         
