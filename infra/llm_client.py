@@ -1,13 +1,16 @@
-"""Cached LLM client using the OpenAI Responses API."""
+"""Cached LLM client supporting OpenAI, Anthropic, and OpenRouter."""
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any, Optional
 from dataclasses import dataclass
+from enum import Enum
 
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
+import anthropic
 
 # Load environment variables from .env file (override=True to take precedence over shell env)
 load_dotenv(override=True)
@@ -17,6 +20,28 @@ from .onuw import ChatMessage
 
 # Cache directory
 CACHE_DIR = Path(__file__).parent.parent / "llm_cache"
+
+
+class LLMProvider(Enum):
+    """Supported LLM providers."""
+    OPENAI = "openai"
+    ANTHROPIC = "anthropic"
+    OPENROUTER = "openrouter"
+
+
+def detect_provider(model: str) -> LLMProvider:
+    """
+    Detect the LLM provider based on the model name.
+    
+    - Models starting with 'claude-' → Anthropic
+    - Models containing '/' → OpenRouter (uses path-based model names like 'anthropic/claude-3-opus')
+    - Everything else → OpenAI (default)
+    """
+    if "/" in model:
+        return LLMProvider.OPENROUTER
+    if model.startswith("claude-"):
+        return LLMProvider.ANTHROPIC
+    return LLMProvider.OPENAI
 
 
 @dataclass
@@ -74,10 +99,29 @@ def _save_to_cache(cache_key: str, response: dict) -> None:
 
 
 class CachedLLMClient:
-    """Async LLM client with caching support using the Responses API."""
+    """Async LLM client with caching support for OpenAI, Anthropic, and OpenRouter."""
     
-    def __init__(self, api_key: Optional[str] = None, use_cache: bool = True):
-        self.client = AsyncOpenAI(api_key=api_key)
+    def __init__(
+        self, 
+        api_key: Optional[str] = None, 
+        use_cache: bool = True,
+        anthropic_api_key: Optional[str] = None,
+        openrouter_api_key: Optional[str] = None,
+    ):
+        # Initialize OpenAI client
+        self.openai_client = AsyncOpenAI(api_key=api_key)
+        
+        # Initialize Anthropic client
+        anthropic_key = anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY")
+        self.anthropic_client = anthropic.AsyncAnthropic(api_key=anthropic_key) if anthropic_key else None
+        
+        # Initialize OpenRouter client (uses OpenAI-compatible API)
+        openrouter_key = openrouter_api_key or os.environ.get("OPENROUTER_API_KEY")
+        self.openrouter_client = AsyncOpenAI(
+            api_key=openrouter_key,
+            base_url="https://openrouter.ai/api/v1",
+        ) if openrouter_key else None
+        
         self.use_cache = use_cache
         self._cache_hits = 0
         self._cache_misses = 0
@@ -96,19 +140,41 @@ class CachedLLMClient:
         reasoning: Optional[dict] = None,
     ) -> LLMResponse:
         """
-        Make a request using the Responses API with caching.
+        Make a request to the appropriate LLM provider with caching.
         
         Args:
-            model: The model to use (e.g., "gpt-5-mini")
-            messages: List of ChatMessage objects or dicts (converted to Responses API format)
-            tools: Optional list of tool definitions
+            model: The model to use. Provider is auto-detected:
+                   - "claude-*" → Anthropic
+                   - "provider/model" → OpenRouter  
+                   - Otherwise → OpenAI
+            messages: List of ChatMessage objects or dicts
+            tools: Optional list of tool definitions (Chat Completions format)
             tool_choice: Optional tool choice specification
             temperature: Sampling temperature
-            reasoning: Optional reasoning settings (e.g., {"effort": "medium", "summary": "detailed"})
+            reasoning: Optional reasoning settings (OpenAI only)
             
         Returns:
             LLMResponse with content and/or tool calls
         """
+        provider = detect_provider(model)
+        
+        if provider == LLMProvider.ANTHROPIC:
+            return await self._anthropic_completion(model, messages, tools, tool_choice, temperature)
+        elif provider == LLMProvider.OPENROUTER:
+            return await self._openrouter_completion(model, messages, tools, tool_choice, temperature)
+        else:
+            return await self._openai_completion(model, messages, tools, tool_choice, temperature, reasoning)
+    
+    async def _openai_completion(
+        self,
+        model: str,
+        messages: list[ChatMessage] | list[dict],
+        tools: Optional[list[dict]] = None,
+        tool_choice: Optional[str | dict] = None,
+        temperature: float = 1,
+        reasoning: Optional[dict] = None,
+    ) -> LLMResponse:
+        """OpenAI implementation using the Responses API."""
         # Convert ChatMessage objects to Responses API input format
         # Extract system message as instructions, convert rest to input items
         instructions: Optional[str] = None
@@ -212,7 +278,7 @@ class CachedLLMClient:
             api_kwargs["reasoning"] = reasoning
         
         # Make API request using Responses API
-        response = await self.client.responses.create(**api_kwargs)  # type: ignore
+        response = await self.openai_client.responses.create(**api_kwargs)  # type: ignore
         
         # Track token usage (only for actual API calls, not cache hits)
         self._api_calls += 1
@@ -249,6 +315,275 @@ class CachedLLMClient:
             "content": content,
             "tool_calls": tool_calls_list if tool_calls_list else None,
             "status": response.status,
+        }
+        
+        # Save to cache
+        if self.use_cache:
+            _save_to_cache(cache_key, response_dict)
+        
+        return self._parse_response(response_dict)
+    
+    async def _anthropic_completion(
+        self,
+        model: str,
+        messages: list[ChatMessage] | list[dict],
+        tools: Optional[list[dict]] = None,
+        tool_choice: Optional[str | dict] = None,
+        temperature: float = 1,
+    ) -> LLMResponse:
+        """Anthropic implementation using the Messages API."""
+        if self.anthropic_client is None:
+            raise ValueError("Anthropic API key not configured. Set ANTHROPIC_API_KEY environment variable.")
+        
+        # Convert ChatMessage objects to Anthropic Messages API format
+        system_prompt: Optional[str] = None
+        api_messages: list[dict] = []
+        
+        for msg in messages:
+            if isinstance(msg, ChatMessage):
+                role = msg.role
+                content = msg.content
+                tool_calls = msg.tool_calls
+                tool_call_id = msg.tool_call_id
+            else:
+                role = msg.get("role")
+                content = msg.get("content")
+                tool_calls = msg.get("tool_calls")
+                tool_call_id = msg.get("tool_call_id")
+            
+            if role == "system":
+                system_prompt = content
+            elif role == "user":
+                api_messages.append({
+                    "role": "user",
+                    "content": content
+                })
+            elif role == "assistant":
+                if tool_calls:
+                    # Assistant message with tool use
+                    tool_use_blocks = []
+                    for tc in tool_calls:
+                        try:
+                            args = json.loads(tc.get("function", {}).get("arguments", "{}"))
+                        except json.JSONDecodeError:
+                            args = {}
+                        tool_use_blocks.append({
+                            "type": "tool_use",
+                            "id": tc.get("id", ""),
+                            "name": tc.get("function", {}).get("name", ""),
+                            "input": args
+                        })
+                    api_messages.append({
+                        "role": "assistant",
+                        "content": tool_use_blocks
+                    })
+                else:
+                    api_messages.append({
+                        "role": "assistant",
+                        "content": content or ""
+                    })
+            elif role == "tool":
+                # Tool result - Anthropic expects this as a user message with tool_result block
+                api_messages.append({
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": tool_call_id or "",
+                        "content": content or ""
+                    }]
+                })
+        
+        # Check cache
+        if self.use_cache:
+            cache_key = _compute_cache_key(model, api_messages, system_prompt, tools, tool_choice)
+            cached = _load_from_cache(cache_key)
+            if cached is not None:
+                self._cache_hits += 1
+                print(f"  [Cache HIT] {cache_key[:12]}...")
+                return self._parse_response(cached)
+            self._cache_misses += 1
+            print(f"  [Cache MISS] {cache_key[:12]}...")
+        
+        # Build API request kwargs
+        api_kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": api_messages,
+            "max_tokens": 4096,
+            "temperature": temperature,
+        }
+        
+        if system_prompt:
+            api_kwargs["system"] = system_prompt
+        
+        if tools:
+            # Convert tools from Chat Completions format to Anthropic format
+            anthropic_tools = []
+            for tool in tools:
+                if tool.get("type") == "function" and "function" in tool:
+                    func = tool["function"]
+                    anthropic_tools.append({
+                        "name": func.get("name"),
+                        "description": func.get("description", ""),
+                        "input_schema": func.get("parameters", {"type": "object", "properties": {}}),
+                    })
+            api_kwargs["tools"] = anthropic_tools
+            
+            # Handle tool_choice
+            if tool_choice:
+                if tool_choice == "required":
+                    api_kwargs["tool_choice"] = {"type": "any"}
+                elif tool_choice == "auto":
+                    api_kwargs["tool_choice"] = {"type": "auto"}
+                elif tool_choice == "none":
+                    # Don't send tools if none is specified
+                    del api_kwargs["tools"]
+                elif isinstance(tool_choice, dict) and "function" in tool_choice:
+                    api_kwargs["tool_choice"] = {
+                        "type": "tool",
+                        "name": tool_choice["function"]["name"]
+                    }
+        
+        # Make API request
+        response = await self.anthropic_client.messages.create(**api_kwargs)
+        
+        # Track token usage
+        self._api_calls += 1
+        if response.usage:
+            self._total_prompt_tokens += response.usage.input_tokens
+            self._total_completion_tokens += response.usage.output_tokens
+        
+        # Parse response
+        content = None
+        tool_calls_list = []
+        
+        for block in response.content:
+            if block.type == "text":
+                content = block.text
+            elif block.type == "tool_use":
+                tool_calls_list.append({
+                    "id": block.id,
+                    "type": "function",
+                    "function": {
+                        "name": block.name,
+                        "arguments": json.dumps(block.input)
+                    }
+                })
+        
+        # Convert to dict for caching
+        response_dict = {
+            "content": content,
+            "tool_calls": tool_calls_list if tool_calls_list else None,
+            "stop_reason": response.stop_reason,
+        }
+        
+        # Save to cache
+        if self.use_cache:
+            _save_to_cache(cache_key, response_dict)
+        
+        return self._parse_response(response_dict)
+    
+    async def _openrouter_completion(
+        self,
+        model: str,
+        messages: list[ChatMessage] | list[dict],
+        tools: Optional[list[dict]] = None,
+        tool_choice: Optional[str | dict] = None,
+        temperature: float = 1,
+    ) -> LLMResponse:
+        """OpenRouter implementation using their OpenAI-compatible Chat Completions API."""
+        if self.openrouter_client is None:
+            raise ValueError("OpenRouter API key not configured. Set OPENROUTER_API_KEY environment variable.")
+        
+        # Convert ChatMessage objects to Chat Completions format
+        api_messages: list[dict] = []
+        
+        for msg in messages:
+            if isinstance(msg, ChatMessage):
+                role = msg.role
+                content = msg.content
+                tool_calls = msg.tool_calls
+                tool_call_id = msg.tool_call_id
+            else:
+                role = msg.get("role")
+                content = msg.get("content")
+                tool_calls = msg.get("tool_calls")
+                tool_call_id = msg.get("tool_call_id")
+            
+            if role == "system":
+                api_messages.append({"role": "system", "content": content})
+            elif role == "user":
+                api_messages.append({"role": "user", "content": content})
+            elif role == "assistant":
+                msg_dict: dict[str, Any] = {"role": "assistant"}
+                if tool_calls:
+                    msg_dict["tool_calls"] = tool_calls
+                    msg_dict["content"] = content or ""
+                else:
+                    msg_dict["content"] = content or ""
+                api_messages.append(msg_dict)
+            elif role == "tool":
+                api_messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id or "",
+                    "content": content or ""
+                })
+        
+        # Check cache
+        if self.use_cache:
+            cache_key = _compute_cache_key(model, api_messages, None, tools, tool_choice)
+            cached = _load_from_cache(cache_key)
+            if cached is not None:
+                self._cache_hits += 1
+                print(f"  [Cache HIT] {cache_key[:12]}...")
+                return self._parse_response(cached)
+            self._cache_misses += 1
+            print(f"  [Cache MISS] {cache_key[:12]}...")
+        
+        # Build API request kwargs
+        api_kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": api_messages,
+            "temperature": temperature,
+        }
+        
+        if tools:
+            api_kwargs["tools"] = tools
+            if tool_choice:
+                api_kwargs["tool_choice"] = tool_choice
+        
+        # Make API request using Chat Completions API
+        response = await self.openrouter_client.chat.completions.create(**api_kwargs)
+        
+        # Track token usage
+        self._api_calls += 1
+        if response.usage:
+            self._total_prompt_tokens += response.usage.prompt_tokens
+            self._total_completion_tokens += response.usage.completion_tokens
+        
+        # Parse response
+        choice = response.choices[0]
+        message = choice.message
+        
+        content = message.content
+        tool_calls_list = None
+        
+        if message.tool_calls:
+            tool_calls_list = []
+            for tc in message.tool_calls:
+                tool_calls_list.append({
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments
+                    }
+                })
+        
+        # Convert to dict for caching
+        response_dict = {
+            "content": content,
+            "tool_calls": tool_calls_list,
+            "finish_reason": choice.finish_reason,
         }
         
         # Save to cache

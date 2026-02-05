@@ -1,11 +1,11 @@
 {
   "seed": 10,
   "models": [
-    {"model": "gpt-5", "reasoning_effort": "medium"},
-    {"model": "gpt-5", "reasoning_effort": "medium"},
-    {"model": "gpt-5", "reasoning_effort": "medium"},
-    {"model": "gpt-5", "reasoning_effort": "medium"},
-    {"model": "gpt-5", "reasoning_effort": "medium"}
+    {"model": "claude-opus-4-6", "reasoning_effort": "medium"},
+    {"model": "claude-opus-4-6", "reasoning_effort": "medium"},
+    {"model": "claude-opus-4-6", "reasoning_effort": "medium"},
+    {"model": "claude-opus-4-6", "reasoning_effort": "medium"},
+    {"model": "claude-opus-4-6", "reasoning_effort": "medium"}
   ],
   "roles": [
     "WEREWOLF",
