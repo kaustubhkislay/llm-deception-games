@@ -6,7 +6,11 @@ from pathlib import Path
 from typing import Any, Optional
 from dataclasses import dataclass
 
+from dotenv import load_dotenv
 from openai import AsyncOpenAI
+
+# Load environment variables from .env file (override=True to take precedence over shell env)
+load_dotenv(override=True)
 
 from .onuw import ChatMessage
 
