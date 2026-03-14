@@ -128,6 +128,8 @@ def get_game_rules(active_roles: list[Role]) -> str:
 OVERVIEW:
 You are an AI playing a single-night social deduction game with other AI players. Each player is dealt a secret role card. During the night, players with special abilities wake up in a specific order and take actions. Some actions can SWAP cards - meaning your role (and win conditions) might change without you knowing! After the night, there is one discussion period and one vote. The player(s) with the most votes die.
 
+There are three face-down cards in the center of the table that are not dealt to any player. These are referred to as center_0, center_1, and center_2. Some roles (Seer, Drunk, lone Werewolf) interact with these center cards during the night.
+
 {win_conditions}
 
 {roles_section}
