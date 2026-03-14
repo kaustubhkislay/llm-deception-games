@@ -471,30 +471,19 @@ All players submit their messages simultaneously each round. Messages are reveal
 {"This is round 1 - you won't see others' messages until round 2." if current_round == 1 else ""}"""
 
 
-def get_day_thinking_prompt(
+def get_day_prompt(
     player: Player, 
     player_names: list[str], 
     messages_so_far: list[PublicMessage],
     current_round: int,
     total_rounds: int,
 ) -> str:
-    """Generate the thinking prompt for a discussion round (no tools)."""
+    """Generate the day discussion prompt (single call with tools)."""
     context = _build_day_context(player, player_names, messages_so_far, current_round, total_rounds)
     
     return f"""{context}
 
-THINKING PHASE: Analyze your current situation. This is your private thinking phase. Think through your situation carefully. You don't need to take any action during the thinking phase. After the thinking phase there will be an action phase, where you will be able to take actions like messaging the public group chat."""
-
-
-def get_day_action_prompt() -> str:
-    """Generate the action prompt for a discussion round (with tools)."""
-    return """Now take your action for this round.
-
-You must either:
-- send_message: Send a PUBLIC message to the group (all players will see this!)
-- pass_turn: Stay silent this round
-
-If you send a message, include ONLY what you want to say out loud. No labels, no reasoning - just your actual words."""
+Use send_message to say something to the group, or pass_turn to stay silent this round. If you send a message, include ONLY what you want to say out loud - no labels, no reasoning, just your actual words."""
 
 
 def _build_voting_context(player: Player, player_names: list[str], messages: Optional[list[PublicMessage]] = None) -> str:
@@ -522,26 +511,11 @@ In case of a tie, ALL tied players die.
 You must vote for another player. There is NO option to abstain or vote for "no one" - you MUST choose one of the listed players."""
 
 
-def get_voting_thinking_prompt(player: Player, player_names: list[str], messages: Optional[list[PublicMessage]] = None) -> str:
-    """Generate the thinking prompt for the voting phase (no tools)."""
+def get_voting_prompt(player: Player, player_names: list[str], messages: Optional[list[PublicMessage]] = None) -> str:
+    """Generate the voting prompt (single call with tools)."""
     context = _build_voting_context(player, player_names, messages)
     
     return f"""{context}
-
-THINKING PHASE: Before casting your vote, analyze who should be eliminated.
-
-Consider:
-1. What role claims were made? Do any contradict each other?
-2. Who might be a Werewolf based on the discussion?
-3. What is YOUR current win condition (based on your ending role, which may have been swapped)?
-4. Who should you vote for to achieve your win condition?
-
-Think through this carefully. After you respond, you'll be asked to cast your vote."""
-
-
-def get_voting_action_prompt() -> str:
-    """Generate the action prompt for the voting phase (with tools)."""
-    return """Now cast your vote.
 
 Use cast_vote to vote for the player you want to eliminate. You MUST vote for one of the other players - there is no option to abstain."""
 
@@ -643,6 +617,8 @@ class PlayerAgent:
             "response": response.content,
             "tool_calls": response.tool_calls,
             "phase": self._current_phase,
+            "usage": response.usage,
+            "reasoning_summary": response.reasoning_summary,
         }
         
         # Include system prompt in the first thought event so that 
@@ -721,18 +697,12 @@ class PlayerAgent:
     ) -> Optional[str]:
         """
         Run a single discussion round for this player.
-        
-        Uses a two-step process:
-        1. First, prompt the model to think (no tools) - generates reasoning
-        2. Then, prompt the model to take action (with tools)
-        
         Returns the message content to send, or None if player passes.
         """
         self._current_phase = "DAY"
         print(f"[{self.player.name}] Round {current_round}/{total_rounds}")
         
-        # Step 1: Thinking phase (no tools)
-        thinking_prompt = get_day_thinking_prompt(
+        prompt = get_day_prompt(
             self.player, 
             player_names, 
             messages_so_far,
@@ -740,14 +710,7 @@ class PlayerAgent:
             total_rounds=total_rounds,
         )
         
-        print(f"  [{self.player.name}] Thinking...")
-        await self._call_llm(thinking_prompt, tools=[], tool_choice=None)
-        
-        # Step 2: Action phase (with tools)
-        action_prompt = get_day_action_prompt()
-        
-        print(f"  [{self.player.name}] Taking action...")
-        response = await self._call_llm(action_prompt, DAY_TOOLS, tool_choice="required")
+        response = await self._call_llm(prompt, DAY_TOOLS, tool_choice="required")
         
         if response.tool_calls:
             for tool_call in response.tool_calls:
@@ -760,7 +723,7 @@ class PlayerAgent:
                 ))
                 
                 if result.startswith("SEND_MESSAGE:"):
-                    content = result[13:]  # Remove "SEND_MESSAGE:" prefix
+                    content = result[13:]
                     print(f"  [{self.player.name}] Sending message: {content[:50]}...")
                     return content
                 elif result == "PASS_TURN":
@@ -773,26 +736,14 @@ class PlayerAgent:
     async def run_voting_phase(self, player_names: list[str], messages: Optional[list[PublicMessage]] = None) -> tuple[Optional[str], Optional[str]]:
         """
         Run the voting phase and return (vote_target, reasoning) tuple.
-        
-        Uses a two-step process:
-        1. First, prompt the model to think (no tools) - generates reasoning
-        2. Then, prompt the model to cast vote (with tools)
         """
         self._current_phase = "VOTING"
         print(f"[{self.player.name}] Starting voting phase")
         
-        # Step 1: Thinking phase (no tools)
-        thinking_prompt = get_voting_thinking_prompt(self.player, player_names, messages)
+        prompt = get_voting_prompt(self.player, player_names, messages)
+        response = await self._call_llm(prompt, VOTING_TOOLS, tool_choice="required")
         
-        print(f"  [{self.player.name}] Thinking about vote...")
-        thinking_response = await self._call_llm(thinking_prompt, tools=[], tool_choice=None)
-        reasoning = thinking_response.content
-        
-        # Step 2: Action phase (with tools)
-        action_prompt = get_voting_action_prompt()
-        
-        print(f"  [{self.player.name}] Casting vote...")
-        response = await self._call_llm(action_prompt, VOTING_TOOLS, tool_choice="required")
+        reasoning = response.content
         
         if response.tool_calls:
             for tool_call in response.tool_calls:

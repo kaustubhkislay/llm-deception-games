@@ -808,12 +808,56 @@ h2 {
 }
 
 .thought-label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
     font-family: var(--font-mono);
     font-size: 0.7rem;
     text-transform: uppercase;
     letter-spacing: 0.1em;
     color: var(--text-muted);
     margin-bottom: 0.5rem;
+}
+
+.thought-usage {
+    font-size: 0.65rem;
+    color: var(--accent-gold);
+    text-transform: none;
+    letter-spacing: 0;
+    white-space: nowrap;
+}
+
+.reasoning-summary {
+    margin-top: 0.5rem;
+    margin-bottom: 0.25rem;
+    border: 1px solid rgba(168, 131, 255, 0.25);
+    border-radius: 4px;
+    background: rgba(168, 131, 255, 0.06);
+    overflow: hidden;
+}
+
+.reasoning-summary-label {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #a883ff;
+    padding: 0.4rem 0.75rem;
+    background: rgba(168, 131, 255, 0.08);
+    border-bottom: 1px solid rgba(168, 131, 255, 0.15);
+}
+
+.reasoning-summary-content {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    padding: 0.75rem;
+    color: #c9b3f5;
+    max-height: 300px;
+    overflow-y: auto;
 }
 
 .thought-content {

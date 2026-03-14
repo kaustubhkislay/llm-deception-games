@@ -50,6 +50,8 @@ class LLMResponse:
     content: Optional[str]
     tool_calls: Optional[list[dict]]
     raw_response: dict
+    usage: Optional[dict] = None
+    reasoning_summary: Optional[str] = None
 
 
 def _compute_cache_key(
@@ -231,9 +233,15 @@ class CachedLLMClient:
                     "output": content or ""
                 })
         
+        # Inject summary=auto into reasoning before cache key + API call
+        effective_reasoning = reasoning
+        if reasoning:
+            effective_reasoning = dict(reasoning)
+            effective_reasoning.setdefault("summary", "auto")
+
         # Check cache (include reasoning settings in cache key)
         if self.use_cache:
-            cache_key = _compute_cache_key(model, input_items, instructions, tools, tool_choice, reasoning)
+            cache_key = _compute_cache_key(model, input_items, instructions, tools, tool_choice, effective_reasoning)
             cached = _load_from_cache(cache_key)
             if cached is not None:
                 self._cache_hits += 1
@@ -247,16 +255,13 @@ class CachedLLMClient:
             "model": model,
             "input": input_items,
             "temperature": temperature,
-            "store": False,  # Don't store responses on OpenAI's side
+            "store": False,
         }
         
         if instructions:
             api_kwargs["instructions"] = instructions
         
         if tools:
-            # Convert tools from Chat Completions format to Responses API format
-            # Chat Completions: {"type": "function", "function": {"name": ..., "description": ..., "parameters": ...}}
-            # Responses API: {"type": "function", "name": ..., "description": ..., "parameters": ...}
             converted_tools = []
             for tool in tools:
                 if tool.get("type") == "function" and "function" in tool:
@@ -268,36 +273,49 @@ class CachedLLMClient:
                         "parameters": func.get("parameters", {}),
                     })
                 else:
-                    # Already in correct format or different type
                     converted_tools.append(tool)
             api_kwargs["tools"] = converted_tools
             if tool_choice:
                 api_kwargs["tool_choice"] = tool_choice
         
-        if reasoning:
-            api_kwargs["reasoning"] = reasoning
+        if effective_reasoning:
+            api_kwargs["reasoning"] = effective_reasoning
         
         # Make API request using Responses API
         response = await self.openai_client.responses.create(**api_kwargs)  # type: ignore
         
         # Track token usage (only for actual API calls, not cache hits)
         self._api_calls += 1
+        usage_dict = None
         if response.usage:
             self._total_prompt_tokens += response.usage.input_tokens
             self._total_completion_tokens += response.usage.output_tokens
+            usage_dict = {
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+            }
+            details = getattr(response.usage, "output_tokens_details", None)
+            if details:
+                reasoning_toks = getattr(details, "reasoning_tokens", 0)
+                usage_dict["reasoning_tokens"] = reasoning_toks
         
-        # Parse response output to extract content and tool calls
+        # Parse response output
         content = None
         tool_calls_list = []
+        reasoning_summary = None
         
         for item in response.output:
-            if item.type == "message":
-                # Extract text content from message
+            if item.type == "reasoning":
+                summaries = getattr(item, "summary", None)
+                if summaries:
+                    reasoning_summary = "\n\n".join(
+                        s.text for s in summaries if getattr(s, "text", None)
+                    ) or None
+            elif item.type == "message":
                 for content_item in item.content:
                     if content_item.type == "output_text":
                         content = content_item.text
             elif item.type == "function_call":
-                # Extract function call - convert fc_ back to call_ for compatibility
                 call_id = item.call_id
                 if call_id and call_id.startswith("fc_"):
                     call_id = call_id.replace("fc_", "call_", 1)
@@ -315,6 +333,8 @@ class CachedLLMClient:
             "content": content,
             "tool_calls": tool_calls_list if tool_calls_list else None,
             "status": response.status,
+            "usage": usage_dict,
+            "reasoning_summary": reasoning_summary,
         }
         
         # Save to cache
@@ -598,6 +618,8 @@ class CachedLLMClient:
             content=response_dict.get("content"),
             tool_calls=response_dict.get("tool_calls"),
             raw_response=response_dict,
+            usage=response_dict.get("usage"),
+            reasoning_summary=response_dict.get("reasoning_summary"),
         )
     
     @property
@@ -683,13 +705,13 @@ VOTE_TOOL = {
     "type": "function",
     "function": {
         "name": "cast_vote",
-        "description": "Cast your vote for who should be lynched. Vote for a living player's name, or 'no_lynch' to vote against lynching anyone.",
+        "description": "Cast your vote for who should be eliminated. You MUST vote for another player - there is no option to abstain.",
         "parameters": {
             "type": "object",
             "properties": {
                 "target": {
                     "type": "string",
-                    "description": "The name of the player you want to vote to lynch, or 'no_lynch' to skip"
+                    "description": "The name of the player you want to vote to eliminate. Must be one of the other players."
                 }
             },
             "required": ["target"]

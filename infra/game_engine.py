@@ -237,8 +237,6 @@ def load_game_from_log(log_path: str) -> dict:
                 if phase_key not in player_thoughts[player_name]:
                     player_thoughts[player_name][phase_key] = []
                 
-                # If this thought includes the system prompt, prepend it
-                # This allows reconstructing the full chat thread by appending all phases
                 system_prompt = data.get("system_prompt")
                 if system_prompt:
                     player_thoughts[player_name][phase_key].append({
@@ -250,11 +248,16 @@ def load_game_from_log(log_path: str) -> dict:
                     "role": "user",
                     "content": data.get("prompt")
                 })
-                player_thoughts[player_name][phase_key].append({
+                assistant_thought = {
                     "role": "assistant", 
                     "content": data.get("response"),
-                    "tool_calls": data.get("tool_calls")
-                })
+                    "tool_calls": data.get("tool_calls"),
+                }
+                if data.get("usage"):
+                    assistant_thought["usage"] = data["usage"]
+                if data.get("reasoning_summary"):
+                    assistant_thought["reasoning_summary"] = data["reasoning_summary"]
+                player_thoughts[player_name][phase_key].append(assistant_thought)
             
             elif event_type == "GAME_END":
                 winner = data.get("winner")
@@ -456,46 +459,33 @@ class ONUWGame:
         """Get all public messages."""
         return self.state.public_messages.copy()
     
-    async def _execute_night_action(self, player: Player) -> Optional[NightAction]:
-        """Execute a single player's night action based on their original role."""
+    async def _resolve_night_action(self, player: Player) -> tuple[NightAction, dict]:
+        """Resolve a player's night action (state mutation + logging), return action and context for LLM."""
         role = player.original_role
-        agent = self.agents[player.name]
         player_names = [p.name for p in self.players]
         other_players = [n for n in player_names if n != player.name]
         
-        # Build context for this player's night action
         context: dict[str, Any] = {
             "other_players": other_players,
             "player_names": player_names,
         }
         
-        # Role-specific context
         if role == Role.WEREWOLF:
-            # Find other werewolves
             other_werewolves = [p.name for p in self.players 
                               if p.original_role == Role.WEREWOLF and p.name != player.name]
             context["other_werewolves"] = other_werewolves
-            
         elif role == Role.MINION:
-            # Minion sees who the werewolves are
             werewolves = [p.name for p in self.players if p.original_role == Role.WEREWOLF]
             context["werewolves"] = werewolves
-            
         elif role == Role.MASON:
-            # Mason sees the other mason (if not in center)
             other_masons = [p.name for p in self.players 
                           if p.original_role == Role.MASON and p.name != player.name]
             context["other_masons"] = other_masons
-            
         elif role == Role.INSOMNIAC:
-            # Insomniac sees their current card (after all swaps)
             context["current_role"] = player.current_role
         
-        # Get pre-determined action from seeded setup
         if player.name in self.game_setup.night_action_plan:
             plan = self.game_setup.night_action_plan[player.name]
-            
-            # Handle werewolf special case: if not alone, just acknowledge
             if role == Role.WEREWOLF and context.get("other_werewolves"):
                 action = NightAction(
                     player_name=player.name,
@@ -511,7 +501,6 @@ class ONUWGame:
                     targets=list(plan.targets)
                 )
         else:
-            # Passive role with no night action plan
             action = NightAction(
                 player_name=player.name,
                 original_role=role,
@@ -519,18 +508,12 @@ class ONUWGame:
                 targets=[]
             )
         
-        # Execute the action and get result
         result = await self._apply_night_action(player, action)
         action.result = result
         
-        # Build context with results for informational prompt
         context["predetermined_action"] = action
         context["action_result"] = result
         
-        # Inform the agent about what happened (informational, no choice)
-        await agent.run_night_phase(context)
-        
-        # Log the night action
         self.event_log.log_event("NIGHT_ACTION", {
             "player": player.name,
             "role": role.value,
@@ -553,7 +536,12 @@ class ONUWGame:
         )
         
         self.state.night_actions.append(action)
-        return action
+        return action, context
+    
+    async def _inform_agent_of_night(self, player: Player, context: dict) -> None:
+        """Inform an agent about their night action result (LLM call)."""
+        agent = self.agents[player.name]
+        await agent.run_night_phase(context)
     
     async def _apply_night_action(self, player: Player, action: NightAction) -> Optional[Any]:
         """Apply a night action and return the result."""
@@ -633,7 +621,7 @@ class ONUWGame:
         )
     
     async def _run_night_phase(self) -> None:
-        """Run the night phase with actions in order."""
+        """Run the night phase: resolve all actions sequentially, then inform agents concurrently."""
         print(f"\n{'='*50}")
         print(f"NIGHT PHASE")
         print(f"{'='*50}")
@@ -641,7 +629,6 @@ class ONUWGame:
         self.state.phase = Phase.NIGHT
         self.state.phase_start_time = datetime.now()
         
-        # Broadcast phase change
         await self.broadcaster.broadcast(
             GameEvent(
                 event_type=EventType.PHASE_CHANGE,
@@ -650,7 +637,6 @@ class ONUWGame:
         )
         self.event_log.log_event("PHASE_CHANGE", {"phase": "NIGHT", "day_number": 1})
         
-        # Emit GM message with initial role assignments (God View)
         role_assignments = "\n".join([f"  {p.name}: {p.original_role.value}" for p in self.players])
         center_cards = ", ".join([r.value for r in self.state.center_cards])
         await self._emit_gm_message(
@@ -659,15 +645,14 @@ class ONUWGame:
         
         await self._emit_gm_message("Everyone, close your eyes.")
         
-        # Execute night actions in order
+        # Phase 1: Resolve all night actions sequentially (state mutations must be ordered)
+        pending_notifications: list[tuple[Player, dict]] = []
+        
         for role in NIGHT_ACTION_ORDER:
-            # Find players with this original role
             players_with_role = self.state.get_players_with_original_role(role)
-            
             if not players_with_role:
                 continue
             
-            # GM narration
             role_name = role.value.title()
             if len(players_with_role) > 1:
                 await self._emit_gm_message(f"{role_name}s, wake up.")
@@ -677,13 +662,11 @@ class ONUWGame:
             print(f"\n  --- {role.value} PHASE ---")
             self.logger.info(f"  {role.value} phase - {[p.name for p in players_with_role]}")
             
-            # Execute each player's action
             for player in players_with_role:
-                action = await self._execute_night_action(player)
-                if action:
-                    print(f"    {player.name}: {action.action_type} -> {action.targets} = {action.result}")
+                action, context = await self._resolve_night_action(player)
+                pending_notifications.append((player, context))
+                print(f"    {player.name}: {action.action_type} -> {action.targets} = {action.result}")
             
-            # GM closes eyes
             if len(players_with_role) > 1:
                 await self._emit_gm_message(f"{role_name}s, close your eyes.")
             else:
@@ -691,7 +674,13 @@ class ONUWGame:
         
         await self._emit_gm_message("Everyone, wake up!")
         
-        # Log final state after all swaps
+        # Phase 2: Inform all agents concurrently (LLM calls are purely informational)
+        print(f"\n  --- INFORMING ALL AGENTS (concurrent) ---")
+        await asyncio.gather(*[
+            self._inform_agent_of_night(player, context)
+            for player, context in pending_notifications
+        ])
+        
         print(f"\n  --- FINAL ROLES AFTER NIGHT ---")
         for p in self.players:
             changed = " (CHANGED)" if p.current_role != p.original_role else ""
@@ -1077,11 +1066,16 @@ class ONUWGame:
                     "role": "user",
                     "content": data.get("prompt")
                 })
-                player_thoughts[player_name][phase_key].append({
+                assistant_thought = {
                     "role": "assistant",
                     "content": data.get("response"),
-                    "tool_calls": data.get("tool_calls")
-                })
+                    "tool_calls": data.get("tool_calls"),
+                }
+                if data.get("usage"):
+                    assistant_thought["usage"] = data["usage"]
+                if data.get("reasoning_summary"):
+                    assistant_thought["reasoning_summary"] = data["reasoning_summary"]
+                player_thoughts[player_name][phase_key].append(assistant_thought)
         
         # Get killed players from vote result
         killed = []

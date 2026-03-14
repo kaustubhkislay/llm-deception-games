@@ -648,9 +648,31 @@ function renderPlayerThoughts(playerName, snapshot) {
             }).join('');
         }
         
+        let usageHtml = '';
+        if (thought.usage) {
+            const u = thought.usage;
+            const reasoning = u.reasoning_tokens || 0;
+            const completion = (u.output_tokens || 0) - reasoning;
+            const parts = [];
+            if (u.input_tokens != null) parts.push(`in: ${u.input_tokens.toLocaleString()}`);
+            if (reasoning) parts.push(`reasoning: ${reasoning.toLocaleString()}`);
+            if (completion > 0) parts.push(`out: ${completion.toLocaleString()}`);
+            usageHtml = `<div class="thought-usage">${parts.join(' · ')}</div>`;
+        }
+        
+        let reasoningSummaryHtml = '';
+        if (thought.reasoning_summary) {
+            reasoningSummaryHtml = `
+                <div class="reasoning-summary">
+                    <div class="reasoning-summary-label">🧠 Reasoning Summary</div>
+                    <div class="reasoning-summary-content">${escapeHtml(thought.reasoning_summary)}</div>
+                </div>`;
+        }
+
         thoughtsHtml += `
             <div class="thought-message ${cssClass}">
-                <div class="thought-label">${label}</div>
+                <div class="thought-label">${label}${usageHtml}</div>
+                ${reasoningSummaryHtml}
                 <div class="thought-content">${thought.content ? escapeHtml(thought.content) : '<em>No verbal response</em>'}</div>
                 ${toolCallsHtml}
             </div>
@@ -916,7 +938,9 @@ function handleEvent(event) {
             gameState.playerThoughts[thoughtPlayerName][thoughtPhaseKey].push({
                 role: 'assistant',
                 content: data.data.response,
-                tool_calls: data.data.tool_calls
+                tool_calls: data.data.tool_calls,
+                usage: data.data.usage,
+                reasoning_summary: data.data.reasoning_summary
             });
             
             if (timelineState.viewingPlayer === thoughtPlayerName) {
