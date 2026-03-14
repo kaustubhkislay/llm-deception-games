@@ -52,6 +52,7 @@ class LLMResponse:
     raw_response: dict
     usage: Optional[dict] = None
     reasoning_summary: Optional[str] = None
+    reasoning_items: Optional[list[dict]] = None
 
 
 def _compute_cache_key(
@@ -161,7 +162,7 @@ class CachedLLMClient:
         provider = detect_provider(model)
         
         if provider == LLMProvider.ANTHROPIC:
-            return await self._anthropic_completion(model, messages, tools, tool_choice, temperature)
+            return await self._anthropic_completion(model, messages, tools, tool_choice, temperature, reasoning)
         elif provider == LLMProvider.OPENROUTER:
             return await self._openrouter_completion(model, messages, tools, tool_choice, temperature)
         else:
@@ -177,8 +178,6 @@ class CachedLLMClient:
         reasoning: Optional[dict] = None,
     ) -> LLMResponse:
         """OpenAI implementation using the Responses API."""
-        # Convert ChatMessage objects to Responses API input format
-        # Extract system message as instructions, convert rest to input items
         instructions: Optional[str] = None
         input_items: list[dict] = []
         
@@ -188,14 +187,15 @@ class CachedLLMClient:
                 content = msg.content
                 tool_calls = msg.tool_calls
                 tool_call_id = msg.tool_call_id
+                reasoning_items = msg.reasoning_items
             else:
                 role = msg.get("role")
                 content = msg.get("content")
                 tool_calls = msg.get("tool_calls")
                 tool_call_id = msg.get("tool_call_id")
+                reasoning_items = msg.get("reasoning_items")
             
             if role == "system":
-                # System messages become instructions
                 instructions = content
             elif role == "user":
                 input_items.append({
@@ -204,10 +204,13 @@ class CachedLLMClient:
                     "content": content
                 })
             elif role == "assistant":
+                # Inject reasoning items before the assistant output they preceded
+                if reasoning_items:
+                    for ri in reasoning_items:
+                        input_items.append(ri)
+
                 if tool_calls:
-                    # Assistant message with tool calls
                     for tc in tool_calls:
-                        # Convert call_ prefix to fc_ for Responses API
                         original_id = tc.get("id", "")
                         fc_id = original_id.replace("call_", "fc_") if original_id.startswith("call_") else original_id
                         input_items.append({
@@ -218,14 +221,12 @@ class CachedLLMClient:
                             "arguments": tc.get("function", {}).get("arguments", "{}")
                         })
                 else:
-                    # Regular assistant message
                     input_items.append({
                         "type": "message",
                         "role": "assistant",
                         "content": content or ""
                     })
             elif role == "tool":
-                # Tool response - convert call_ prefix to fc_ for Responses API
                 fc_call_id = tool_call_id.replace("call_", "fc_") if tool_call_id and tool_call_id.startswith("call_") else (tool_call_id or "")
                 input_items.append({
                     "type": "function_call_output",
@@ -280,6 +281,7 @@ class CachedLLMClient:
         
         if effective_reasoning:
             api_kwargs["reasoning"] = effective_reasoning
+            api_kwargs["include"] = ["reasoning.encrypted_content"]
         
         # Make API request using Responses API
         response = await self.openai_client.responses.create(**api_kwargs)  # type: ignore
@@ -303,14 +305,26 @@ class CachedLLMClient:
         content = None
         tool_calls_list = []
         reasoning_summary = None
+        response_reasoning_items = []
         
         for item in response.output:
             if item.type == "reasoning":
+                ri: dict[str, Any] = {"type": "reasoning", "id": item.id}
+                encrypted = getattr(item, "encrypted_content", None)
+                if encrypted:
+                    ri["encrypted_content"] = encrypted
+
                 summaries = getattr(item, "summary", None)
+                summary_dicts = []
                 if summaries:
+                    for s in summaries:
+                        if getattr(s, "text", None):
+                            summary_dicts.append({"type": "summary_text", "text": s.text})
                     reasoning_summary = "\n\n".join(
-                        s.text for s in summaries if getattr(s, "text", None)
+                        s["text"] for s in summary_dicts
                     ) or None
+                ri["summary"] = summary_dicts
+                response_reasoning_items.append(ri)
             elif item.type == "message":
                 for content_item in item.content:
                     if content_item.type == "output_text":
@@ -335,6 +349,7 @@ class CachedLLMClient:
             "status": response.status,
             "usage": usage_dict,
             "reasoning_summary": reasoning_summary,
+            "reasoning_items": response_reasoning_items if response_reasoning_items else None,
         }
         
         # Save to cache
@@ -350,12 +365,14 @@ class CachedLLMClient:
         tools: Optional[list[dict]] = None,
         tool_choice: Optional[str | dict] = None,
         temperature: float = 1,
+        reasoning: Optional[dict] = None,
     ) -> LLMResponse:
         """Anthropic implementation using the Messages API."""
         if self.anthropic_client is None:
             raise ValueError("Anthropic API key not configured. Set ANTHROPIC_API_KEY environment variable.")
         
-        # Convert ChatMessage objects to Anthropic Messages API format
+        use_thinking = reasoning is not None
+
         system_prompt: Optional[str] = None
         api_messages: list[dict] = []
         
@@ -365,11 +382,13 @@ class CachedLLMClient:
                 content = msg.content
                 tool_calls = msg.tool_calls
                 tool_call_id = msg.tool_call_id
+                reasoning_items = msg.reasoning_items
             else:
                 role = msg.get("role")
                 content = msg.get("content")
                 tool_calls = msg.get("tool_calls")
                 tool_call_id = msg.get("tool_call_id")
+                reasoning_items = msg.get("reasoning_items")
             
             if role == "system":
                 system_prompt = content
@@ -379,15 +398,19 @@ class CachedLLMClient:
                     "content": content
                 })
             elif role == "assistant":
+                # Build content blocks, prepending thinking blocks if present
+                content_blocks: list[dict] = []
+                if use_thinking and reasoning_items:
+                    for ri in reasoning_items:
+                        content_blocks.append(ri)
+
                 if tool_calls:
-                    # Assistant message with tool use
-                    tool_use_blocks = []
                     for tc in tool_calls:
                         try:
                             args = json.loads(tc.get("function", {}).get("arguments", "{}"))
                         except json.JSONDecodeError:
                             args = {}
-                        tool_use_blocks.append({
+                        content_blocks.append({
                             "type": "tool_use",
                             "id": tc.get("id", ""),
                             "name": tc.get("function", {}).get("name", ""),
@@ -395,7 +418,13 @@ class CachedLLMClient:
                         })
                     api_messages.append({
                         "role": "assistant",
-                        "content": tool_use_blocks
+                        "content": content_blocks
+                    })
+                elif content_blocks:
+                    content_blocks.append({"type": "text", "text": content or ""})
+                    api_messages.append({
+                        "role": "assistant",
+                        "content": content_blocks
                     })
                 else:
                     api_messages.append({
@@ -403,7 +432,6 @@ class CachedLLMClient:
                         "content": content or ""
                     })
             elif role == "tool":
-                # Tool result - Anthropic expects this as a user message with tool_result block
                 api_messages.append({
                     "role": "user",
                     "content": [{
@@ -424,19 +452,32 @@ class CachedLLMClient:
             self._cache_misses += 1
             print(f"  [Cache MISS] {cache_key[:12]}...")
         
-        # Build API request kwargs
+        THINKING_BUDGET = {"low": 2048, "medium": 5000, "high": 10000}
+        thinking_budget = THINKING_BUDGET.get(
+            (reasoning or {}).get("effort", ""), 5000
+        ) if use_thinking else 0
+
+        max_tokens = 4096 + thinking_budget if use_thinking else 4096
+
         api_kwargs: dict[str, Any] = {
             "model": model,
             "messages": api_messages,
-            "max_tokens": 4096,
-            "temperature": temperature,
+            "max_tokens": max_tokens,
         }
+
+        if use_thinking:
+            api_kwargs["temperature"] = 1
+            api_kwargs["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": thinking_budget,
+            }
+        else:
+            api_kwargs["temperature"] = temperature
         
         if system_prompt:
             api_kwargs["system"] = system_prompt
         
         if tools:
-            # Convert tools from Chat Completions format to Anthropic format
             anthropic_tools = []
             for tool in tools:
                 if tool.get("type") == "function" and "function" in tool:
@@ -448,14 +489,12 @@ class CachedLLMClient:
                     })
             api_kwargs["tools"] = anthropic_tools
             
-            # Handle tool_choice
             if tool_choice:
                 if tool_choice == "required":
                     api_kwargs["tool_choice"] = {"type": "any"}
                 elif tool_choice == "auto":
                     api_kwargs["tool_choice"] = {"type": "auto"}
                 elif tool_choice == "none":
-                    # Don't send tools if none is specified
                     del api_kwargs["tools"]
                 elif isinstance(tool_choice, dict) and "function" in tool_choice:
                     api_kwargs["tool_choice"] = {
@@ -463,21 +502,37 @@ class CachedLLMClient:
                         "name": tool_choice["function"]["name"]
                     }
         
-        # Make API request
         response = await self.anthropic_client.messages.create(**api_kwargs)
         
-        # Track token usage
         self._api_calls += 1
+        usage_dict = None
         if response.usage:
             self._total_prompt_tokens += response.usage.input_tokens
             self._total_completion_tokens += response.usage.output_tokens
+            usage_dict = {
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+            }
         
-        # Parse response
         content = None
         tool_calls_list = []
+        response_reasoning_items = []
         
         for block in response.content:
-            if block.type == "text":
+            if block.type == "thinking":
+                response_reasoning_items.append({
+                    "type": "thinking",
+                    "thinking": block.thinking,
+                    "signature": block.signature,
+                })
+                if usage_dict is not None:
+                    usage_dict.setdefault("reasoning_tokens", 0)
+            elif block.type == "redacted_thinking":
+                response_reasoning_items.append({
+                    "type": "redacted_thinking",
+                    "data": block.data,
+                })
+            elif block.type == "text":
                 content = block.text
             elif block.type == "tool_use":
                 tool_calls_list.append({
@@ -489,14 +544,14 @@ class CachedLLMClient:
                     }
                 })
         
-        # Convert to dict for caching
         response_dict = {
             "content": content,
             "tool_calls": tool_calls_list if tool_calls_list else None,
             "stop_reason": response.stop_reason,
+            "usage": usage_dict,
+            "reasoning_items": response_reasoning_items if response_reasoning_items else None,
         }
         
-        # Save to cache
         if self.use_cache:
             _save_to_cache(cache_key, response_dict)
         
@@ -620,6 +675,7 @@ class CachedLLMClient:
             raw_response=response_dict,
             usage=response_dict.get("usage"),
             reasoning_summary=response_dict.get("reasoning_summary"),
+            reasoning_items=response_dict.get("reasoning_items"),
         )
     
     @property

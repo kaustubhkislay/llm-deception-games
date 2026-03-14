@@ -76,6 +76,7 @@ class ChatMessage:
     tool_calls: Optional[list[dict]] = None
     tool_call_id: Optional[str] = None
     name: Optional[str] = None
+    reasoning_items: Optional[list[dict]] = None
 
 
 @dataclass

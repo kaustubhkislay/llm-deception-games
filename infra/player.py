@@ -606,7 +606,8 @@ class PlayerAgent:
         assistant_msg = ChatMessage(
             role="assistant",
             content=response.content or "",
-            tool_calls=response.tool_calls
+            tool_calls=response.tool_calls,
+            reasoning_items=response.reasoning_items,
         )
         self.player.chat_history.append(assistant_msg)
         
