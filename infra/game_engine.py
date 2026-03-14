@@ -84,7 +84,7 @@ def load_game_from_log(log_path: str) -> dict:
     
     def snapshot_players():
         return [
-            {"name": name, "current_role": info["current_role"], "original_role": info["original_role"]}
+            {"name": name, "model": info.get("model"), "current_role": info["current_role"], "original_role": info["original_role"]}
             for name, info in players.items()
         ]
     
@@ -116,6 +116,7 @@ def load_game_from_log(log_path: str) -> dict:
                 game_name = data.get("name")
                 for p in data.get("players", []):
                     players[p["name"]] = {
+                        "model": p.get("model"),
                         "original_role": p["original_role"],
                         "current_role": p["current_role"]
                     }
@@ -1000,7 +1001,7 @@ class ONUWGame:
                     "phase": data.get("phase"),
                     "dayNumber": 1,
                     "players": [
-                        {"name": p.name, "original_role": p.original_role.value, "current_role": p.current_role.value}
+                        {"name": p.name, "model": p.model, "original_role": p.original_role.value, "current_role": p.current_role.value}
                         for p in self.players
                     ],
                     "centerCards": [r.value for r in self.state.center_cards],
@@ -1019,9 +1020,8 @@ class ONUWGame:
                     current_phase["events"].append({**data, "type": "night_action"})
                 elif event_type == "CARD_SWAP":
                     current_phase["events"].append({**data, "type": "card_swap"})
-                    # Update player roles in phase
                     current_phase["players"] = [
-                        {"name": p.name, "original_role": p.original_role.value, "current_role": p.current_role.value}
+                        {"name": p.name, "model": p.model, "original_role": p.original_role.value, "current_role": p.current_role.value}
                         for p in self.players
                     ]
                 elif event_type == "PUBLIC_MESSAGE":
@@ -1039,7 +1039,7 @@ class ONUWGame:
                 "phase": self.state.phase.value,
                 "dayNumber": 1,
                 "players": [
-                    {"name": p.name, "original_role": p.original_role.value, "current_role": p.current_role.value}
+                    {"name": p.name, "model": p.model, "original_role": p.original_role.value, "current_role": p.current_role.value}
                     for p in self.players
                 ],
                 "centerCards": [r.value for r in self.state.center_cards],
@@ -1092,7 +1092,7 @@ class ONUWGame:
             "phase": self.state.phase.value,
             "day_number": 1,
             "players": [
-                {"name": p.name, "original_role": p.original_role.value, "current_role": p.current_role.value}
+                {"name": p.name, "model": p.model, "original_role": p.original_role.value, "current_role": p.current_role.value}
                 for p in self.players
             ],
             "center_cards": [r.value for r in self.state.center_cards],

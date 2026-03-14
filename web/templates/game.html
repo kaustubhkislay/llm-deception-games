@@ -190,6 +190,7 @@ function updatePlayers(players) {
                         ${icon} ${p.current_role}
                         ${roleChanged ? `<span class="role-changed">(was ${p.original_role})</span>` : ''}
                     </span>
+                    ${p.model ? `<span class="player-model">${escapeHtml(p.model)}</span>` : ''}
                 </a>
             </li>
         `;
@@ -542,6 +543,7 @@ function renderGameOver(snapshot) {
                     ${icon} ${p.current_role}
                     ${roleChanged ? `<span class="role-changed">(was ${p.original_role})</span>` : ''}
                 </span>
+                ${p.model ? `<span class="player-model">${escapeHtml(p.model)}</span>` : ''}
                 <span class="player-status">${isKilled ? '💀 KILLED' : '✓ Survived'}</span>
             </div>
         `;
@@ -686,6 +688,7 @@ function showGameOver(winner, players) {
                     ${roleChanged ? `<span class="role-changed">(was ${p.original_role})</span>` : ''}
                 </span>
                 <span class="player-status">${isKilled ? '💀' : '✓'}</span>
+                ${p.model ? `<span class="player-model">${escapeHtml(p.model)}</span>` : ''}
             </div>
         `;
     }).join('');
