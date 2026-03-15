@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Plot comparison of baseline (all Flash) vs experimental (Pro werewolves)."""
+"""
+Plot comparison of baseline vs experimental (upgraded werewolves).
+
+Left panel: werewolf win rate per instance (bar chart with Wilson CIs).
+Right panel: 2×2 paired outcome matrix (game-level, shared seeds).
+"""
 
 import json
 import argparse
@@ -7,20 +12,11 @@ from pathlib import Path
 from collections import defaultdict
 
 import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
 import matplotlib.patches as mpatches
 import numpy as np
 from scipy import stats as scipy_stats
 
 RESULTS_DIR = Path(__file__).parent.parent / "results"
-
-ROLE_ORDER = ["WEREWOLF", "MINION", "SEER", "ROBBER", "TROUBLEMAKER", "DRUNK", "VILLAGER"]
-ROLE_SHORT = {
-    "WEREWOLF": "Werewolf", "MINION": "Minion", "SEER": "Seer",
-    "ROBBER": "Robber", "TROUBLEMAKER": "Trouble-\nmaker", "DRUNK": "Drunk", "VILLAGER": "Villager",
-}
-EVIL_ROLES = {"WEREWOLF", "MINION"}
-EMPTY_ROLE = {"win_rate": 0, "ci_low": 0, "ci_high": 0, "total": 0, "wins": 0}
 
 
 def wilson_ci(wins, total, confidence=0.95):
@@ -34,8 +30,9 @@ def wilson_ci(wins, total, confidence=0.95):
     return p_hat, (max(0, center - margin), min(1, center + margin))
 
 
-def compute_pro_role_stats(games, role_key, config_dir):
-    role_stats = defaultdict(lambda: {"wins": 0, "total": 0})
+def compute_upgraded_ww_stats(games, config_dir, upgraded_pattern):
+    """Compute per-instance werewolf win rate for upgraded players."""
+    wins, total = 0, 0
     for game in games:
         if game["winner"] == "ERROR":
             continue
@@ -43,19 +40,34 @@ def compute_pro_role_stats(games, role_key, config_dir):
         config_path = Path(config_dir) / f"config_{seed:03d}.json"
         with open(config_path) as f:
             config = json.load(f)
-        pro_players = {n for n, m in zip(config["names"], config["models"]) if "pro" in m["model"]}
+        upgraded_players = {
+            n for n, m in zip(config["names"], config["models"])
+            if upgraded_pattern in m["model"]
+        }
         for p in game["players"]:
-            if p["name"] not in pro_players:
-                continue
-            role = p[role_key]
-            role_stats[role]["total"] += 1
-            if p["won"]:
-                role_stats[role]["wins"] += 1
-    result = {}
-    for role, s in role_stats.items():
-        wr, (cl, ch) = wilson_ci(s["wins"], s["total"])
-        result[role] = {"win_rate": wr, "ci_low": cl, "ci_high": ch, "total": s["total"], "wins": s["wins"]}
-    return result
+            if p["name"] in upgraded_players and p["starting_role"] == "WEREWOLF":
+                total += 1
+                if p["won"]:
+                    wins += 1
+    return wins, total
+
+
+def mcnemar_pvalue(b, c):
+    """McNemar's test p-value (two-sided) for off-diagonal counts b, c."""
+    n = b + c
+    if n == 0:
+        return 1.0
+    return scipy_stats.binomtest(b, n, 0.5).pvalue
+
+
+def significance_stars(p):
+    if p < 0.001:
+        return " ***"
+    elif p < 0.01:
+        return " **"
+    elif p < 0.05:
+        return " *"
+    return ""
 
 
 def main():
@@ -64,7 +76,13 @@ def main():
     parser.add_argument("--baseline-batch", type=str, required=True)
     parser.add_argument("--experimental-batch", type=str, required=True)
     parser.add_argument("--config-dir", type=str, required=True)
-    parser.add_argument("--output", "-o", type=str, default="13_gem31pro_ww_comparison.png")
+    parser.add_argument("--output", "-o", type=str, required=True)
+    parser.add_argument("--upgraded-pattern", type=str, default="pro",
+                        help="Substring to match in model name to identify upgraded players")
+    parser.add_argument("--upgraded-label", type=str, default=None,
+                        help="Short label for the upgraded model")
+    parser.add_argument("--baseline-label", type=str, default=None,
+                        help="Short label for the baseline model")
     args = parser.parse_args()
 
     def resolve(p):
@@ -82,156 +100,146 @@ def main():
     if not config_dir.is_absolute():
         config_dir = Path(__file__).parent.parent / config_dir
 
-    base_by_start = baseline_analysis["by_starting_role"]
-    base_by_end = baseline_analysis["by_ending_role"]
-    exp_by_start = compute_pro_role_stats(exp_batch["games"], "starting_role", config_dir)
-    exp_by_end = compute_pro_role_stats(exp_batch["games"], "ending_role", config_dir)
+    upgraded_label = args.upgraded_label or args.upgraded_pattern.title()
+    baseline_label = args.baseline_label or "baseline"
 
-    # Paired outcome matrix
-    baseline_seeds = {g["seed"]: g["winner"] for g in baseline_batch["games"]}
-    exp_seeds = {g["seed"]: g["winner"] for g in exp_batch["games"] if g["winner"] != "ERROR"}
+    # ── Werewolf win rate per instance ──
+    base_ww = baseline_analysis["by_starting_role"]["WEREWOLF"]
+    base_wr, (base_cl, base_ch) = wilson_ci(base_ww["wins"], base_ww["total"])
+    n_base_games = baseline_analysis["completed_games"]
+
+    exp_wins, exp_total = compute_upgraded_ww_stats(
+        exp_batch["games"], config_dir, args.upgraded_pattern)
+    exp_wr, (exp_cl, exp_ch) = wilson_ci(exp_wins, exp_total)
+    n_exp_games = len([g for g in exp_batch["games"] if g["winner"] != "ERROR"])
+
+    # ── Paired outcome matrix (game-level) ──
+    baseline_seeds = {g["seed"]: g["winner"] for g in baseline_batch["games"]
+                      if g["winner"] != "ERROR"}
+    exp_seeds = {g["seed"]: g["winner"] for g in exp_batch["games"]
+                 if g["winner"] != "ERROR"}
     shared_seeds = sorted(set(baseline_seeds) & set(exp_seeds))
 
+    # matrix[row][col]: row = baseline outcome, col = experimental outcome
+    #   row 0 = baseline village wins, row 1 = baseline wolf wins
+    #   col 0 = experimental village wins, col 1 = experimental wolf wins
     matrix = np.zeros((2, 2), dtype=int)
     for seed in shared_seeds:
-        bw, ew = baseline_seeds[seed], exp_seeds[seed]
-        r = 0 if ew == "VILLAGE" else 1
-        c = 1 if bw == "VILLAGE" else 0
-        matrix[r, c] += 1
+        br = 0 if baseline_seeds[seed] == "VILLAGE" else 1
+        ec = 0 if exp_seeds[seed] == "VILLAGE" else 1
+        matrix[br, ec] += 1
 
-    n_exp = len([g for g in exp_batch["games"] if g["winner"] != "ERROR"])
-    n_base = baseline_analysis["completed_games"]
+    # McNemar test: off-diagonal = Village→Wolf (matrix[0,1]) vs Wolf→Village (matrix[1,0])
+    b, c = int(matrix[0, 1]), int(matrix[1, 0])
+    p_val = mcnemar_pvalue(b, c)
+    stars = significance_stars(p_val)
 
-    # ── Styling ──
+    # ── Plot ──
     plt.rcParams.update({
         "font.family": "sans-serif",
-        "axes.titlesize": 13,
-        "axes.labelsize": 11,
+        "axes.titlesize": 14,
+        "axes.labelsize": 12,
     })
 
     COLOR_BASE = "#7BAFD4"
     COLOR_EXP = "#E8963E"
-    BAR_WIDTH = 0.34
+    COLOR_V = "#B8D4E8"  # light blue (experimental → village)
+    COLOR_W = "#D4878F"  # pink/red (experimental → wolf)
 
-    fig = plt.figure(figsize=(16, 9.5), facecolor="white")
-    gs = gridspec.GridSpec(2, 2, width_ratios=[2.8, 1], hspace=0.45, wspace=0.35,
-                           left=0.06, right=0.96, top=0.92, bottom=0.08)
-
-    ax1 = fig.add_subplot(gs[0, 0])
-    ax2 = fig.add_subplot(gs[1, 0], sharex=ax1)
-    ax3 = fig.add_subplot(gs[:, 1])
+    fig, (ax_bar, ax_mat) = plt.subplots(1, 2, figsize=(12, 4.5),
+                                          gridspec_kw={"width_ratios": [1, 1.1], "wspace": 0.4})
+    fig.subplots_adjust(left=0.08, right=0.95, top=0.84, bottom=0.12)
 
     fig.suptitle(
-        f"Gemini 3.1 Pro werewolves vs Flash baseline",
-        fontsize=15, fontweight="bold", y=0.97,
+        f"{upgraded_label} werewolves vs {baseline_label} baseline ({len(shared_seeds)} games)",
+        fontsize=16, fontweight="bold", y=0.95,
     )
 
-    def plot_grouped_bars(ax, base_data, exp_data, title):
-        roles = [r for r in ROLE_ORDER if r in base_data]
-        x = np.arange(len(roles))
+    # ── Bar chart ──
+    bars = ax_bar.bar(
+        [0, 1],
+        [base_wr * 100, exp_wr * 100],
+        color=[COLOR_BASE, COLOR_EXP],
+        width=0.55,
+        edgecolor="white",
+        linewidth=0.8,
+        zorder=2,
+    )
+    ax_bar.errorbar(
+        [0, 1],
+        [base_wr * 100, exp_wr * 100],
+        yerr=[
+            [base_wr * 100 - base_cl * 100, exp_wr * 100 - exp_cl * 100],
+            [base_ch * 100 - base_wr * 100, exp_ch * 100 - exp_wr * 100],
+        ],
+        fmt="none", color="#333333", capsize=5, capthick=1.2, linewidth=1.2, zorder=3,
+    )
 
-        base_wr = [base_data[r]["win_rate"] * 100 for r in roles]
-        base_cl = [base_data[r]["ci_low"] * 100 for r in roles]
-        base_ch = [base_data[r]["ci_high"] * 100 for r in roles]
-        base_err_lo = [max(0, w - c) for w, c in zip(base_wr, base_cl)]
-        base_err_hi = [max(0, c - w) for w, c in zip(base_wr, base_ch)]
-        base_n = [base_data[r]["total"] for r in roles]
+    ax_bar.annotate(f"{base_wr*100:.1f}%", (0, base_ch * 100 + 2),
+                    ha="center", fontsize=12, fontweight="bold", color="#4A7A9B")
+    exp_label_text = f"{exp_wr*100:.1f}%{stars}"
+    ax_bar.annotate(exp_label_text, (1, exp_ch * 100 + 2),
+                    ha="center", fontsize=12, fontweight="bold", color="#B06A20")
 
-        has_exp = [exp_data.get(r, EMPTY_ROLE)["total"] > 0 for r in roles]
-        exp_wr = [exp_data.get(r, EMPTY_ROLE)["win_rate"] * 100 for r in roles]
-        exp_cl = [exp_data.get(r, EMPTY_ROLE)["ci_low"] * 100 for r in roles]
-        exp_ch = [exp_data.get(r, EMPTY_ROLE)["ci_high"] * 100 for r in roles]
-        exp_err_lo = [max(0, w - c) for w, c in zip(exp_wr, exp_cl)]
-        exp_err_hi = [max(0, c - w) for w, c in zip(exp_wr, exp_ch)]
-        exp_n = [exp_data.get(r, EMPTY_ROLE)["total"] for r in roles]
+    ax_bar.set_xticks([0, 1])
+    ax_bar.set_xticklabels([
+        f"All {baseline_label}\n(n={base_ww['total']} instances)",
+        f"{upgraded_label} werewolves\n(n={exp_total} instances)",
+    ], fontsize=10)
+    ax_bar.set_ylabel("Werewolf Win Rate (%)")
+    ax_bar.set_title("Werewolf win rate", fontweight="bold", pad=8)
+    ax_bar.set_ylim(0, 100)
+    ax_bar.yaxis.set_major_locator(plt.MultipleLocator(20))
+    ax_bar.yaxis.grid(True, alpha=0.25, linewidth=0.5)
+    ax_bar.set_axisbelow(True)
+    ax_bar.spines["top"].set_visible(False)
+    ax_bar.spines["right"].set_visible(False)
 
-        ax.bar(x - BAR_WIDTH / 2, base_wr, BAR_WIDTH, color=COLOR_BASE, alpha=0.85,
-               edgecolor="white", linewidth=0.6, zorder=2)
-        ax.errorbar(x - BAR_WIDTH / 2, base_wr, yerr=[base_err_lo, base_err_hi],
-                    fmt="none", color="#444444", capsize=3, capthick=1, linewidth=1, zorder=3)
+    # ── 2×2 paired outcome matrix ──
+    ax_mat.set_title(f"Paired outcome comparison (n={len(shared_seeds)})",
+                     fontweight="bold", pad=8)
+    ax_mat.set_xlim(-0.6, 1.6)
+    ax_mat.set_ylim(-0.6, 1.6)
+    ax_mat.invert_yaxis()
+    ax_mat.axis("off")
 
-        first_exp = True
-        for i in range(len(roles)):
-            if has_exp[i]:
-                ax.bar(i + BAR_WIDTH / 2, exp_wr[i], BAR_WIDTH, color=COLOR_EXP, alpha=0.85,
-                       edgecolor="white", linewidth=0.6, zorder=2)
-                ax.errorbar(i + BAR_WIDTH / 2, exp_wr[i],
-                            yerr=[[exp_err_lo[i]], [exp_err_hi[i]]],
-                            fmt="none", color="#444444", capsize=3, capthick=1, linewidth=1, zorder=3)
-                ax.annotate(f"n={exp_n[i]}", (i + BAR_WIDTH / 2, 2),
-                            ha="center", fontsize=7.5, color="#9A6520")
-                first_exp = False
-
-        for i in range(len(roles)):
-            ax.annotate(f"n={base_n[i]}", (i - BAR_WIDTH / 2, 2),
-                        ha="center", fontsize=7.5, color="#5A8EAF")
-
-        ax.set_xticks(x)
-        ax.set_xticklabels([ROLE_SHORT.get(r, r) for r in roles], fontsize=9.5)
-        ax.set_ylabel("Win Rate (%)")
-        ax.set_title(title, fontweight="bold", pad=8)
-        ax.set_ylim(0, 108)
-        ax.set_xlim(-0.6, len(roles) - 0.4)
-        ax.yaxis.set_major_locator(plt.MultipleLocator(20))
-        ax.yaxis.grid(True, alpha=0.25, linewidth=0.5)
-        ax.set_axisbelow(True)
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-
-    plot_grouped_bars(ax1, base_by_start, exp_by_start, "Win rate by initial role (start of night)")
-    plot_grouped_bars(ax2, base_by_end, exp_by_end, "Win rate by final role (end of night)")
-
-    legend_handles = [
-        mpatches.Patch(facecolor=COLOR_BASE, alpha=0.85, edgecolor="white",
-                       label=f"Baseline — all Flash (n={n_base} games)"),
-        mpatches.Patch(facecolor=COLOR_EXP, alpha=0.85, edgecolor="white",
-                       label=f"Pro WW players only (n={n_exp} games)"),
+    cell_colors = [
+        [COLOR_V, COLOR_W],
+        [COLOR_V, COLOR_W],
     ]
-    ax1.legend(handles=legend_handles, fontsize=8.5, loc="upper left",
-               framealpha=0.9, edgecolor="#cccccc")
-
-    # ── 2×2 paired-outcome matrix ──
-    cell_bg = [
-        ["#B5DEAD", "#E0E0E0"],
-        ["#E0E0E0", "#E8A0A0"],
+    cell_labels = [
+        ["Village → Village", "Village → Wolf"],
+        ["Wolf → Village", "Wolf → Wolf"],
     ]
-    row_labels = ["Exp: Village wins", "Exp: Wolf wins"]
-    col_labels = ["Base: Wolf wins", "Base: Village wins"]
-    total = matrix.sum()
 
-    ax3.set_xlim(-1.0, 2.3)
-    ax3.set_ylim(-1.0, 2.3)
-    ax3.invert_yaxis()
-
+    total_shared = len(shared_seeds)
     for i in range(2):
         for j in range(2):
-            rect = plt.Rectangle((j - 0.46, i - 0.46), 0.92, 0.92,
-                                 facecolor=cell_bg[i][j], alpha=0.75,
-                                 edgecolor="#888888", linewidth=1.2, zorder=2)
-            ax3.add_patch(rect)
-            count = matrix[i, j]
-            pct = count / total * 100 if total > 0 else 0
-            ax3.text(j, i - 0.05, str(count), ha="center", va="center",
-                     fontsize=22, fontweight="bold", zorder=3)
-            ax3.text(j, i + 0.28, f"({pct:.0f}%)", ha="center", va="center",
-                     fontsize=10, color="#555555", zorder=3)
+            rect = plt.Rectangle((j - 0.45, i - 0.45), 0.9, 0.9,
+                                 facecolor=cell_colors[i][j], alpha=0.6,
+                                 edgecolor="#aaaaaa", linewidth=1, zorder=2)
+            ax_mat.add_patch(rect)
 
-    for j, label in enumerate(col_labels):
-        ax3.text(j, -0.7, label, ha="center", va="center", fontsize=9.5, fontweight="bold")
-    for i, label in enumerate(row_labels):
-        ax3.text(-0.75, i, label, ha="center", va="center", fontsize=9.5, fontweight="bold")
+            ax_mat.text(j, i - 0.18, cell_labels[i][j],
+                        ha="center", va="center", fontsize=9, color="#444444", zorder=3)
+            ax_mat.text(j, i + 0.12, str(matrix[i, j]),
+                        ha="center", va="center", fontsize=24, fontweight="bold", zorder=3)
 
-    ax3.set_title("Paired outcome comparison", fontsize=13, fontweight="bold", pad=12)
-    ax3.axis("off")
+    # Row labels
+    ax_mat.text(-0.65, 0, "Baseline:\nvillage wins", ha="center", va="center", fontsize=9.5)
+    ax_mat.text(-0.65, 1, "Baseline:\nwerewolves win", ha="center", va="center", fontsize=9.5)
 
-    # Annotation explaining colors
-    ax3.text(0.5, 2.0, "Green = Pro WW flipped outcome to Village\nRed = Pro WW flipped outcome to Wolf",
-             ha="center", va="center", fontsize=8, color="#666666",
-             style="italic", transform=ax3.transData)
+    # Column labels
+    ax_mat.text(0, 1.65, "Experimental:\nvillage wins", ha="center", va="top", fontsize=9.5)
+    ax_mat.text(1, 1.65, "Experimental:\nwerewolves win", ha="center", va="top", fontsize=9.5)
 
     output_path = RESULTS_DIR / args.output
     plt.savefig(output_path, dpi=150, bbox_inches="tight", facecolor="white")
     print(f"Saved to {output_path}")
+    print(f"  Baseline WW win rate: {base_wr*100:.1f}% ({base_ww['wins']}/{base_ww['total']})")
+    print(f"  Experimental WW win rate: {exp_wr*100:.1f}% ({exp_wins}/{exp_total})")
+    print(f"  Shared seeds: {len(shared_seeds)}")
+    print(f"  McNemar p={p_val:.4f}{stars}")
 
 
 if __name__ == "__main__":
