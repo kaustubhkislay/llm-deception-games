@@ -154,7 +154,7 @@ class CachedLLMClient:
             tools: Optional list of tool definitions (Chat Completions format)
             tool_choice: Optional tool choice specification
             temperature: Sampling temperature
-            reasoning: Optional reasoning settings (OpenAI only)
+            reasoning: Optional reasoning settings (OpenAI, Anthropic, OpenRouter)
             
         Returns:
             LLMResponse with content and/or tool calls
@@ -164,7 +164,7 @@ class CachedLLMClient:
         if provider == LLMProvider.ANTHROPIC:
             return await self._anthropic_completion(model, messages, tools, tool_choice, temperature, reasoning)
         elif provider == LLMProvider.OPENROUTER:
-            return await self._openrouter_completion(model, messages, tools, tool_choice, temperature)
+            return await self._openrouter_completion(model, messages, tools, tool_choice, temperature, reasoning)
         else:
             return await self._openai_completion(model, messages, tools, tool_choice, temperature, reasoning)
     
@@ -564,6 +564,7 @@ class CachedLLMClient:
         tools: Optional[list[dict]] = None,
         tool_choice: Optional[str | dict] = None,
         temperature: float = 1,
+        reasoning: Optional[dict] = None,
     ) -> LLMResponse:
         """OpenRouter implementation using their OpenAI-compatible Chat Completions API."""
         if self.openrouter_client is None:
@@ -578,11 +579,13 @@ class CachedLLMClient:
                 content = msg.content
                 tool_calls = msg.tool_calls
                 tool_call_id = msg.tool_call_id
+                reasoning_items = msg.reasoning_items
             else:
                 role = msg.get("role")
                 content = msg.get("content")
                 tool_calls = msg.get("tool_calls")
                 tool_call_id = msg.get("tool_call_id")
+                reasoning_items = msg.get("reasoning_items")
             
             if role == "system":
                 api_messages.append({"role": "system", "content": content})
@@ -595,6 +598,8 @@ class CachedLLMClient:
                     msg_dict["content"] = content or ""
                 else:
                     msg_dict["content"] = content or ""
+                if reasoning_items:
+                    msg_dict["reasoning_details"] = reasoning_items
                 api_messages.append(msg_dict)
             elif role == "tool":
                 api_messages.append({
@@ -605,7 +610,7 @@ class CachedLLMClient:
         
         # Check cache
         if self.use_cache:
-            cache_key = _compute_cache_key(model, api_messages, None, tools, tool_choice)
+            cache_key = _compute_cache_key(model, api_messages, None, tools, tool_choice, reasoning)
             cached = _load_from_cache(cache_key)
             if cached is not None:
                 self._cache_hits += 1
@@ -626,14 +631,29 @@ class CachedLLMClient:
             if tool_choice:
                 api_kwargs["tool_choice"] = tool_choice
         
+        if reasoning:
+            api_kwargs["extra_body"] = {"reasoning": {"effort": reasoning.get("effort", "medium")}}
+        
         # Make API request using Chat Completions API
         response = await self.openrouter_client.chat.completions.create(**api_kwargs)
         
         # Track token usage
         self._api_calls += 1
+        usage_dict = None
         if response.usage:
             self._total_prompt_tokens += response.usage.prompt_tokens
             self._total_completion_tokens += response.usage.completion_tokens
+            usage_dict = {
+                "input_tokens": response.usage.prompt_tokens,
+                "output_tokens": response.usage.completion_tokens,
+            }
+            reasoning_toks = getattr(response.usage, "reasoning_tokens", None)
+            if reasoning_toks is None:
+                details = getattr(response.usage, "completion_tokens_details", None)
+                if details:
+                    reasoning_toks = getattr(details, "reasoning_tokens", None)
+            if reasoning_toks:
+                usage_dict["reasoning_tokens"] = reasoning_toks
         
         # Parse response
         choice = response.choices[0]
@@ -654,12 +674,24 @@ class CachedLLMClient:
                     }
                 })
         
+        reasoning_text = getattr(message, "reasoning", None)
+        reasoning_details = getattr(message, "reasoning_details", None)
+        
         # Convert to dict for caching
-        response_dict = {
+        response_dict: dict[str, Any] = {
             "content": content,
             "tool_calls": tool_calls_list,
             "finish_reason": choice.finish_reason,
         }
+        if reasoning_text:
+            response_dict["reasoning_summary"] = reasoning_text
+        if reasoning_details:
+            response_dict["reasoning_items"] = [
+                rd if isinstance(rd, dict) else rd.__dict__ if hasattr(rd, '__dict__') else dict(rd)
+                for rd in reasoning_details
+            ]
+        if usage_dict:
+            response_dict["usage"] = usage_dict
         
         # Save to cache
         if self.use_cache:
