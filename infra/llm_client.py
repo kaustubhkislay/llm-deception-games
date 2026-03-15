@@ -635,7 +635,16 @@ class CachedLLMClient:
             api_kwargs["extra_body"] = {"reasoning": {"effort": reasoning.get("effort", "medium")}}
         
         # Make API request using Chat Completions API
-        response = await self.openrouter_client.chat.completions.create(**api_kwargs)
+        try:
+            response = await self.openrouter_client.chat.completions.create(**api_kwargs)
+        except Exception as e:
+            if "Corrupted thought signature" in str(e):
+                print(f"  [OpenRouter] Corrupted thought signature, retrying without reasoning_details...")
+                for msg in api_kwargs["messages"]:
+                    msg.pop("reasoning_details", None)
+                response = await self.openrouter_client.chat.completions.create(**api_kwargs)
+            else:
+                raise
         
         # Track token usage
         self._api_calls += 1
