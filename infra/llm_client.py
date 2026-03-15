@@ -634,17 +634,43 @@ class CachedLLMClient:
         if reasoning:
             api_kwargs["extra_body"] = {"reasoning": {"effort": reasoning.get("effort", "medium")}}
         
-        # Make API request using Chat Completions API
-        try:
-            response = await self.openrouter_client.chat.completions.create(**api_kwargs)
-        except Exception as e:
-            if "Corrupted thought signature" in str(e):
-                print(f"  [OpenRouter] Corrupted thought signature, retrying without reasoning_details...")
-                for msg in api_kwargs["messages"]:
-                    msg.pop("reasoning_details", None)
+        # Make API request with retry for empty responses
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
                 response = await self.openrouter_client.chat.completions.create(**api_kwargs)
-            else:
-                raise
+            except Exception as e:
+                if "Corrupted thought signature" in str(e):
+                    print(f"  [OpenRouter] Corrupted thought signature, retrying without reasoning_details...")
+                    for msg in api_kwargs["messages"]:
+                        msg.pop("reasoning_details", None)
+                    response = await self.openrouter_client.chat.completions.create(**api_kwargs)
+                else:
+                    raise
+
+            # Check for empty/null choices
+            if not response.choices:
+                if attempt < max_retries - 1:
+                    import asyncio as _asyncio
+                    wait = 2 ** attempt
+                    print(f"  [OpenRouter] Empty response (choices=None), retry {attempt+1}/{max_retries} in {wait}s...")
+                    await _asyncio.sleep(wait)
+                    continue
+                raise RuntimeError(f"OpenRouter returned empty response after {max_retries} attempts")
+
+            choice = response.choices[0]
+            msg_content = getattr(choice.message, "content", None) if choice.message else None
+            msg_tool_calls = getattr(choice.message, "tool_calls", None) if choice.message else None
+            if msg_content is None and msg_tool_calls is None:
+                if attempt < max_retries - 1:
+                    import asyncio as _asyncio
+                    wait = 2 ** attempt
+                    print(f"  [OpenRouter] Empty message (no content or tool_calls), retry {attempt+1}/{max_retries} in {wait}s...")
+                    await _asyncio.sleep(wait)
+                    continue
+                raise RuntimeError(f"OpenRouter returned empty message after {max_retries} attempts")
+
+            break  # Valid response
         
         # Track token usage
         self._api_calls += 1
@@ -664,8 +690,7 @@ class CachedLLMClient:
             if reasoning_toks:
                 usage_dict["reasoning_tokens"] = reasoning_toks
         
-        # Parse response
-        choice = response.choices[0]
+        # Parse response (choice already extracted in retry loop)
         message = choice.message
         
         content = message.content
