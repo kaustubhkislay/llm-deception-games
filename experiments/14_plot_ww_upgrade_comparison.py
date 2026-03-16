@@ -200,7 +200,7 @@ def main():
     # ── 2×2 paired outcome matrix ──
     ax_mat.set_title(f"Paired outcome comparison (n={len(shared_seeds)})",
                      fontweight="bold", pad=8)
-    ax_mat.set_xlim(-0.6, 1.6)
+    ax_mat.set_xlim(-0.9, 1.6)
     ax_mat.set_ylim(-0.6, 1.6)
     ax_mat.invert_yaxis()
     ax_mat.axis("off")
@@ -228,8 +228,8 @@ def main():
                         ha="center", va="center", fontsize=24, fontweight="bold", zorder=3)
 
     # Row labels
-    ax_mat.text(-0.65, 0, "Baseline:\nvillage wins", ha="center", va="center", fontsize=9.5)
-    ax_mat.text(-0.65, 1, "Baseline:\nwerewolves win", ha="center", va="center", fontsize=9.5)
+    ax_mat.text(-0.8, 0, "Baseline:\nvillage wins", ha="center", va="center", fontsize=9.5)
+    ax_mat.text(-0.8, 1, "Baseline:\nwerewolves win", ha="center", va="center", fontsize=9.5)
 
     # Column labels
     ax_mat.text(0, 1.65, "Experimental:\nvillage wins", ha="center", va="top", fontsize=9.5)
