@@ -113,24 +113,35 @@ def main():
     exp_wr, (exp_cl, exp_ch) = wilson_ci(exp_wins, exp_total)
     n_exp_games = len([g for g in exp_batch["games"] if g["winner"] != "ERROR"])
 
-    # ── Paired outcome matrix (game-level) ──
-    baseline_seeds = {g["seed"]: g["winner"] for g in baseline_batch["games"]
-                      if g["winner"] != "ERROR"}
-    exp_seeds = {g["seed"]: g["winner"] for g in exp_batch["games"]
-                 if g["winner"] != "ERROR"}
-    shared_seeds = sorted(set(baseline_seeds) & set(exp_seeds))
+    # ── Paired outcome matrix (per-WW-instance, personal outcomes) ──
+    baseline_games_by_seed = {g["seed"]: g for g in baseline_batch["games"]
+                              if g["winner"] != "ERROR"}
+    exp_games_by_seed = {g["seed"]: g for g in exp_batch["games"]
+                         if g["winner"] != "ERROR"}
+    shared_seeds = sorted(set(baseline_games_by_seed) & set(exp_games_by_seed))
 
-    # matrix[row][col]: row = baseline outcome, col = experimental outcome
-    #   row 0 = baseline village wins, row 1 = baseline wolf wins
-    #   col 0 = experimental village wins, col 1 = experimental wolf wins
+    # matrix[row][col]: row = baseline personal outcome, col = experimental personal outcome
+    #   row 0 = WW lost in baseline, row 1 = WW won in baseline
+    #   col 0 = WW lost in experimental, col 1 = WW won in experimental
     matrix = np.zeros((2, 2), dtype=int)
+    game_matrix = np.zeros((2, 2), dtype=int)
     for seed in shared_seeds:
-        br = 0 if baseline_seeds[seed] == "VILLAGE" else 1
-        ec = 0 if exp_seeds[seed] == "VILLAGE" else 1
-        matrix[br, ec] += 1
+        bg = baseline_games_by_seed[seed]
+        eg = exp_games_by_seed[seed]
 
-    # McNemar test: off-diagonal = Village→Wolf (matrix[0,1]) vs Wolf→Village (matrix[1,0])
-    b, c = int(matrix[0, 1]), int(matrix[1, 0])
+        br_game = 0 if bg["winner"] == "VILLAGE" else 1
+        ec_game = 0 if eg["winner"] == "VILLAGE" else 1
+        game_matrix[br_game, ec_game] += 1
+
+        base_won = {p["name"]: p["won"] for p in bg["players"]}
+        for p in eg["players"]:
+            if p["starting_role"] == "WEREWOLF":
+                br = 1 if base_won.get(p["name"], False) else 0
+                ec = 1 if p["won"] else 0
+                matrix[br, ec] += 1
+
+    # McNemar test on game-level outcomes (the correct paired unit)
+    b, c = int(game_matrix[0, 1]), int(game_matrix[1, 0])
     p_val = mcnemar_pvalue(b, c)
     stars = significance_stars(p_val)
 
@@ -198,7 +209,8 @@ def main():
     ax_bar.spines["right"].set_visible(False)
 
     # ── 2×2 paired outcome matrix ──
-    ax_mat.set_title(f"Paired outcome comparison (n={len(shared_seeds)})",
+    total_ww_instances = int(matrix.sum())
+    ax_mat.set_title(f"Paired outcome (n={total_ww_instances} WW instances)",
                      fontweight="bold", pad=8)
     ax_mat.set_xlim(-0.9, 1.6)
     ax_mat.set_ylim(-0.6, 1.6)
@@ -210,8 +222,8 @@ def main():
         [COLOR_V_DARK, COLOR_W_LIGHT],    # W→V (flipped, dark), W→W (same, light)
     ]
     cell_labels = [
-        ["Village → Village", "Village → Wolf"],
-        ["Wolf → Village", "Wolf → Wolf"],
+        ["Lost → Lost", "Lost → Won"],
+        ["Won → Lost", "Won → Won"],
     ]
 
     total_shared = len(shared_seeds)
@@ -228,12 +240,12 @@ def main():
                         ha="center", va="center", fontsize=24, fontweight="bold", zorder=3)
 
     # Row labels
-    ax_mat.text(-0.8, 0, "Baseline:\nvillage wins", ha="center", va="center", fontsize=9.5)
-    ax_mat.text(-0.8, 1, "Baseline:\nwerewolves win", ha="center", va="center", fontsize=9.5)
+    ax_mat.text(-0.8, 0, f"{baseline_label}\nlost", ha="center", va="center", fontsize=9.5)
+    ax_mat.text(-0.8, 1, f"{baseline_label}\nwon", ha="center", va="center", fontsize=9.5)
 
     # Column labels
-    ax_mat.text(0, 1.65, "Experimental:\nvillage wins", ha="center", va="top", fontsize=9.5)
-    ax_mat.text(1, 1.65, "Experimental:\nwerewolves win", ha="center", va="top", fontsize=9.5)
+    ax_mat.text(0, 1.65, f"{upgraded_label}\nlost", ha="center", va="top", fontsize=9.5)
+    ax_mat.text(1, 1.65, f"{upgraded_label}\nwon", ha="center", va="top", fontsize=9.5)
 
     output_path = RESULTS_DIR / args.output
     plt.savefig(output_path, dpi=150, bbox_inches="tight", facecolor="white")
