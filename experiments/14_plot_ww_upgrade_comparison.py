@@ -143,8 +143,10 @@ def main():
 
     COLOR_BASE = "#7BAFD4"
     COLOR_EXP = "#E8963E"
-    COLOR_V = "#B8D4E8"  # light blue (experimental → village)
-    COLOR_W = "#D4878F"  # pink/red (experimental → wolf)
+    COLOR_V_LIGHT = "#B8D4E8"  # light blue (same outcome, village wins)
+    COLOR_V_DARK = "#6B9EC4"   # dark blue (flipped to village)
+    COLOR_W_LIGHT = "#E8C0C4"  # light pink (same outcome, wolf wins)
+    COLOR_W_DARK = "#C46B75"   # dark red (flipped to wolf)
 
     fig, (ax_bar, ax_mat) = plt.subplots(1, 2, figsize=(12, 4.5),
                                           gridspec_kw={"width_ratios": [1, 1.1], "wspace": 0.4})
@@ -204,8 +206,8 @@ def main():
     ax_mat.axis("off")
 
     cell_colors = [
-        [COLOR_V, COLOR_W],
-        [COLOR_V, COLOR_W],
+        [COLOR_V_LIGHT, COLOR_W_DARK],   # V→V (same, light), V→W (flipped, dark)
+        [COLOR_V_DARK, COLOR_W_LIGHT],    # W→V (flipped, dark), W→W (same, light)
     ]
     cell_labels = [
         ["Village → Village", "Village → Wolf"],
