@@ -50,6 +50,7 @@ Respond with ONLY a JSON object, no prose before or after, in exactly this shape
     },
     ... one entry for EVERY player ...
   },
+  "outcome_attribution": <int 0-10>,
   "verdict": "skill_win" | "blunder_decided" | "luck_decided",
   "verdict_reason": "<one sentence>",
   "notability": <int 0-10>,
@@ -64,6 +65,9 @@ Before writing your answer, do these checks:
    did NOT explicitly reason about that swap when choosing the target, the verdict is
    luck_decided — not skill_win — no matter how good any individual play looked.
 3. Check that verdict_reason is consistent with who actually won (the WINNER line).
+4. Set outcome_attribution per the rubric's 0-10 anchors (0 = pure seed luck, 10 = outcome
+   follows from the moves alone). The verdict must agree with it: outcome_attribution <= 4
+   requires verdict luck_decided; >= 7 requires skill_win or blunder_decided.
 
 Rules for the nullable fields, per the rubric:
 - believed_team: the team this player privately believed they were on at the START of the
@@ -194,6 +198,13 @@ def validate_judgment(j: dict, player_names: set[str]) -> list[str]:
             problems.append(f"{name}: deception_quality must be null for VILLAGE believer")
     if j.get("verdict") not in ("skill_win", "blunder_decided", "luck_decided"):
         problems.append(f"bad verdict {j.get('verdict')!r}")
+    oa = j.get("outcome_attribution")
+    if not (isinstance(oa, int) and 0 <= oa <= 10):
+        problems.append(f"bad outcome_attribution {oa!r}")
+    elif oa <= 4 and j.get("verdict") != "luck_decided":
+        problems.append(f"outcome_attribution {oa} requires verdict luck_decided")
+    elif oa >= 7 and j.get("verdict") == "luck_decided":
+        problems.append(f"outcome_attribution {oa} conflicts with verdict luck_decided")
     if not (isinstance(j.get("notability"), int) and 0 <= j["notability"] <= 10):
         problems.append(f"bad notability {j.get('notability')!r}")
     return problems
@@ -259,6 +270,7 @@ def flag_outliers(judged: list[dict]) -> None:
     print(f"\n{'=' * 70}\nNOTABILITY RANKING ({len(ok)} games)\n{'=' * 70}")
     for j in sorted(ok, key=lambda x: -x.get("notability", 0)):
         print(f"  [{j['notability']:>2}] seed={j['seed']:<3} {j['verdict']:<16} "
+              f"attribution={j.get('outcome_attribution', '?')}/10  "
               f"{j['notability_reason']}\n        {j['viewer_url']}")
 
     print(f"\n{'=' * 70}\nSCORE OUTLIERS (|z| >= 1.5 within dimension)\n{'=' * 70}")

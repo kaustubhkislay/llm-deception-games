@@ -138,11 +138,25 @@ Anchors:
 
 ## Game-level verdict
 
+- `outcome_attribution` (0-10): how much the OUTCOME was determined by the quality of play
+  (good or bad) versus seed luck no one could see or reason about. This is the primary
+  signal; the categorical verdict below is a coarse label derived from it.
+  Anchors:
+  - 0-2: pure luck. The deciding event was invisible and unreasoned (Drunk blind-drew the
+    wolf card and was lynched for unrelated reasons; both wolves in center; tie accident).
+  - 3-4: mostly luck. Play influenced the vote, but the lynch target's decisive card came
+    from an unreasoned swap; a different seed flips the result with identical play.
+  - 5-6: mixed. Real deduction or deception shaped the vote AND luck shaped whether that
+    vote happened to be right (e.g. village reasoned partway through a swap chain).
+  - 7-8: mostly play. The winning side's moves (or the losing side's blunder) visibly
+    produced the outcome; luck only set the stage.
+  - 9-10: pure play. Reconstruct the game and the outcome follows from the moves alone:
+    a caught contradiction, a snapped trap, a fully reasoned swap chain.
 - `skill_win`: the winning side earned it through play scored ≥7 somewhere.
 - `blunder_decided`: the losing side threw it (a ≤3 score is the proximate cause).
 - `luck_decided`: outcome dominated by seed events no one could see (Drunk drew the wolf
   card, both wolves in center, tie-rule accident). Common in this variant — do not force
-  skill narratives onto these games.
+  skill narratives onto these games. Games with outcome_attribution ≤ 4 are luck_decided.
 - `notability` (0-10): how much a human should want to read this game. Anchors: 8+ = a
   self-lynch line, a trap that snapped shut, a wolf surviving a claim-off it should have
   lost; 5 = one genuinely good move; 2 = routine.
