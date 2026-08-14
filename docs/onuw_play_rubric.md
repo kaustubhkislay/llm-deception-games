@@ -157,6 +157,13 @@ Anchors:
 - `luck_decided`: outcome dominated by seed events no one could see (Drunk drew the wolf
   card, both wolves in center, tie-rule accident). Common in this variant — do not force
   skill narratives onto these games. Games with outcome_attribution ≤ 4 are luck_decided.
+- Minion-sacrifice rule: a wolf-team win that runs through the Minion getting lynched is
+  SKILL, not luck, when the Minion's private reasoning shows deliberate intent to draw the
+  vote (sacrifice language, "get myself lynched", actively courting suspicion to shield a
+  wolf) — regardless of whether the village could have known. Check the Minion's private
+  thread before classifying any Minion-death wolf win. Without such intent (the Minion was
+  simply caught lying and their death happened to win), luck_decided stands. Score luck
+  from the WINNING side's agency, not from the village's blindness alone.
 - `notability` (0-10): how much a human should want to read this game. Anchors: 8+ = a
   self-lynch line, a trap that snapped shut, a wolf surviving a claim-off it should have
   lost; 5 = one genuinely good move; 2 = routine.
