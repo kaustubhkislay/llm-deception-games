@@ -221,7 +221,27 @@ async def judge_game(client: CachedLLMClient, judge_model: str, rubric: str,
               "agents. Score play quality strictly according to the rubric below. "
               "Score decisions against what each player could know, never against "
               "ground truth they could not see.\n\n" + rubric)
-    user = rendering + "\n\n=== YOUR TASK ===\n" + OUTPUT_SCHEMA_INSTRUCTIONS
+
+    # Deterministic trigger for the rubric's Minion-sacrifice rule: the judge must not
+    # be trusted to remember this check on its own.
+    minion_note = ""
+    if game.get("winner") == "WEREWOLF":
+        dead_minions = [p["name"] for p in game["players"]
+                        if p["name"] in game.get("killed_players", [])
+                        and p["ending_role"] == "MINION"]
+        if dead_minions:
+            minion_note = (
+                f"\n\nMANDATORY CHECK — this is a wolf-team win via the death of the "
+                f"Minion ({', '.join(dead_minions)}). Before choosing the verdict, apply "
+                f"the rubric's Minion-sacrifice rule: read {dead_minions[0]}'s PRIVATE "
+                f"THREAD above and QUOTE (in verdict_reason, in quotation marks) the "
+                f"phrase that shows whether they deliberately drew the lynch onto "
+                f"themselves. If such intent exists, the verdict is skill_win with "
+                f"outcome_attribution >= 7 and their deception_quality >= 8. Only if "
+                f"their thread shows NO deliberate intent to be lynched may this game "
+                f"be luck_decided.")
+
+    user = rendering + minion_note + "\n\n=== YOUR TASK ===\n" + OUTPUT_SCHEMA_INSTRUCTIONS
 
     messages = [ChatMessage(role="system", content=system),
                 ChatMessage(role="user", content=user)]
