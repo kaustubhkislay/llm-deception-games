@@ -603,6 +603,16 @@ class PlayerAgent:
             reasoning=reasoning_settings,
         )
         
+        # Sanitize tool-call arguments before they enter history: providers reject
+        # replayed assistant messages whose function.arguments are not valid JSON.
+        if response.tool_calls:
+            for tc in response.tool_calls:
+                fn = tc.get("function", {})
+                try:
+                    json.loads(fn.get("arguments") or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    fn["arguments"] = "{}"
+
         assistant_msg = ChatMessage(
             role="assistant",
             content=response.content or "",
@@ -642,7 +652,13 @@ class PlayerAgent:
     def _handle_tool_call(self, tool_call: dict) -> str:
         """Execute a tool call and return the result."""
         func_name = tool_call["function"]["name"]
-        args = json.loads(tool_call["function"]["arguments"])
+        try:
+            args = json.loads(tool_call["function"]["arguments"])
+        except (json.JSONDecodeError, TypeError):
+            # Some models occasionally emit truncated/invalid JSON arguments.
+            # Treat as a pass rather than crashing the game.
+            print(f"  [{self.player.name}] Malformed tool arguments, treating as pass")
+            return "PASS_TURN"
         
         if func_name == "send_message":
             content = args.get("content", "")
