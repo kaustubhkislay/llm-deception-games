@@ -1,0 +1,43 @@
+{
+  "models": [
+    {
+      "model": "qwen/qwen3.8-max",
+      "reasoning_effort": "medium"
+    },
+    {
+      "model": "google/gemini-3-flash-preview",
+      "reasoning_effort": "medium"
+    },
+    {
+      "model": "google/gemini-3-flash-preview",
+      "reasoning_effort": "medium"
+    },
+    {
+      "model": "google/gemini-3-flash-preview",
+      "reasoning_effort": "medium"
+    },
+    {
+      "model": "google/gemini-3-flash-preview",
+      "reasoning_effort": "medium"
+    }
+  ],
+  "roles": [
+    "WEREWOLF",
+    "WEREWOLF",
+    "MINION",
+    "SEER",
+    "ROBBER",
+    "TROUBLEMAKER",
+    "DRUNK",
+    "VILLAGER"
+  ],
+  "names": [
+    "Alice",
+    "Bob",
+    "Charlie",
+    "Diana",
+    "Edward"
+  ],
+  "num_rounds": 5,
+  "seed": 64
+}
