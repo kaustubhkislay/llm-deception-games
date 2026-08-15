@@ -103,9 +103,16 @@ class ModelConfig:
         )
     
     def get_reasoning_settings(self) -> Optional[dict]:
-        """Get reasoning settings dict for LLM API, or None if no reasoning."""
+        """Get reasoning settings dict for LLM API, or None if no reasoning.
+
+        "none" explicitly disables thinking (needed for providers whose models
+        think by default, e.g. qwen3.8-max on Alibaba, where thinking mode
+        rejects forced tool_choice).
+        """
         if self.reasoning_effort is None:
             return None
+        if self.reasoning_effort == "none":
+            return {"enabled": False}
         return {"effort": self.reasoning_effort}
 
 

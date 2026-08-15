@@ -632,7 +632,10 @@ class CachedLLMClient:
                 api_kwargs["tool_choice"] = tool_choice
         
         if reasoning:
-            api_kwargs["extra_body"] = {"reasoning": {"effort": reasoning.get("effort", "medium")}}
+            if reasoning.get("enabled") is False:
+                api_kwargs["extra_body"] = {"reasoning": {"enabled": False}}
+            else:
+                api_kwargs["extra_body"] = {"reasoning": {"effort": reasoning.get("effort", "medium")}}
         
         # Make API request with retry for empty responses
         max_retries = 3
