@@ -13,12 +13,10 @@
       "reasoning_effort": "medium"
     },
     {
-      "model": "qwen/qwen3.8-max",
-      "reasoning_effort": "medium"
+      "model": "qwen/qwen3.8-max"
     },
     {
-      "model": "qwen/qwen3.8-max",
-      "reasoning_effort": "medium"
+      "model": "qwen/qwen3.8-max"
     }
   ],
   "roles": [
