@@ -495,12 +495,42 @@ Any condition with McNemar p in [0.05, 0.25]: generate seeds 50-99 for that cond
 
 ## Deviations
 
-(record slug substitutions, re-runs, and design changes here as they happen)
+- Sample size: the "extend only if p in [0.05, 0.25]" rule was dropped. Every condition was extended to seeds 0-99 for a uniform n=100, so no condition got a second chance that the others did not.
+- C10 qwen/qwen3.8-max is unrunnable: the provider makes thinking mandatory and rejects forced tool_choice (93/100 games errored). Substituted the open-weights qwen/qwen3.8-2.4t-a95b (`settings/onuw_WwWwMiSeRbTrDrVi_qwen38ww_gem3flashmed`). 2 of its 100 games died on malformed tool-call JSON before the sanitizer landed.
+- Labels in `results/suite_spec.json` and the writeup differ from this matrix: C7 kimi-k3, C8 deepseek-v4-pro, C9 qwen3.8. The Run Log below uses this plan's numbering.
+- C8 glm-5.2 was skipped in the August run. Configs for seeds 0-99 were generated 2026-10-02; the run is pending OpenRouter credit.
 
 ## Run Log
 
+Final n=100 batches (the ones `results/suite_spec.json` uses). Seeds 0-49 replay from the LLM cache of the n=50 batches, so the n=50 batches are subsets, not extra games.
+
 | Condition | Results file | Games | ERRORs | Date |
 |---|---|---|---|---|
-| B1 | | | | |
-| B2 | | | | |
-| C1-C10 | | | | |
+| B1 gpt-5-mini | `08_batch_u1_b1_n100_20260814_155944.json` | 100 | 0 | 2026-08-14 |
+| B2 gemini-3-flash | `08_batch_x1_b2_gem3flash_n100_20260814_135926.json` | 100 | 0 | 2026-08-14 |
+| C1 flash WW vs mini | `08_batch_u2_c1_n100_20260814_163455.json` | 100 | 0 | 2026-08-14 |
+| C2 gemini-3.1-pro WW | `08_batch_u5_c2_n100_20260814_182948.json` | 100 | 0 | 2026-08-14 |
+| C3 opus-4.6 WW | `08_batch_u6_c3_n100_20260814_190609.json` | 100 | 0 | 2026-08-14 |
+| C4 opus-4.8 WW | `08_batch_x2_c4_opus48ww_n100_20260814_142312.json` | 100 | 0 | 2026-08-14 |
+| C5 gpt-5.6-sol WW | `08_batch_u3_c5_n100_20260814_171327.json` | 100 | 0 | 2026-08-14 |
+| C6 fable-5 WW | `08_batch_u4_c6_n100_20260814_175150.json` | 100 | 0 | 2026-08-14 |
+| C7 kimi-k3 WW | `08_batch_v3_c7_kimi_n100_20260814_230927.json` | 100 | 0 | 2026-08-14 |
+| C8 glm-5.2 WW | pending (OpenRouter credit) | — | — | — |
+| C9 deepseek-v4-pro WW | `08_batch_v1_c8_dsv4_n100_20260814_214114.json` | 100 | 0 | 2026-08-14 |
+| C10 qwen3.8-max WW | `08_batch_v2_c9_qwen_n100_20260814_222858.json` | 100 | 93 | 2026-08-14 |
+| C10 substitute: qwen3.8 open weights | `08_batch_v6_c9_qwen38_n100_20260815_030038.json` | 100 | 2 | 2026-08-15 |
+
+Earlier batches, superseded by the n=100 files above:
+
+| Batch | Results file | Games | ERRORs | Date |
+|---|---|---|---|---|
+| pilot B1 | `08_batch_pilot_b1_gpt5mini_20260813_001020.json` | 3 | 0 | 2026-08-13 |
+| pilot C3 | `08_batch_pilot_c3_opus46ww_20260813_001329.json` | 3 | 0 | 2026-08-13 |
+| B1 n=50 | `08_batch_r1_b1_gpt5mini_baseline_20260813_162315.json` | 50 | 0 | 2026-08-13 |
+| B2 n=50 | `08_batch_r2_b2_gem3flash_baseline_20260813_165242.json` | 50 | 0 | 2026-08-13 |
+| C1 n=50 | `08_batch_r3_c1_flashww_vs_mini_20260813_171407.json` | 50 | 0 | 2026-08-13 |
+| C2 n=50 | `08_batch_r4_c2_gem31proww_20260813_185854.json` | 50 | 0 | 2026-08-13 |
+| C3 n=50 | `08_batch_r5_c3_opus46ww_20260813_192112.json` | 50 | 0 | 2026-08-13 |
+| C4 n=50 | `08_batch_s1_c4_opus48ww_20260814_010754.json` | 50 | 0 | 2026-08-14 |
+| C5 n=50 | `08_batch_s2_c5_gpt56solww_20260814_013143.json` | 50 | 0 | 2026-08-14 |
+| C6 n=50 | `08_batch_s3_c6_fable5ww_20260814_021040.json` | 50 | 0 | 2026-08-14 |
