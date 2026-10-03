@@ -498,7 +498,7 @@ Any condition with McNemar p in [0.05, 0.25]: generate seeds 50-99 for that cond
 - Sample size: the "extend only if p in [0.05, 0.25]" rule was dropped. Every condition was extended to seeds 0-99 for a uniform n=100, so no condition got a second chance that the others did not.
 - C10 qwen/qwen3.8-max is unrunnable: the provider makes thinking mandatory and rejects forced tool_choice (93/100 games errored). Substituted the open-weights qwen/qwen3.8-2.4t-a95b (`settings/onuw_WwWwMiSeRbTrDrVi_qwen38ww_gem3flashmed`). 2 of its 100 games died on malformed tool-call JSON before the sanitizer landed.
 - Labels in `results/suite_spec.json` and the writeup differ from this matrix: C7 kimi-k3, C8 deepseek-v4-pro, C9 qwen3.8. The Run Log below uses this plan's numbering.
-- C8 glm-5.2 was skipped in the August run. Configs for seeds 0-99 were generated 2026-10-02; the run is pending OpenRouter credit.
+- C8 glm-5.2 dropped (decided 2026-10-03). The open-weights tier is already covered by kimi-k3, deepseek-v4-pro, and qwen3.8, so a fourth open model adds little. Its configs were generated and then removed; only a single failed smoke-test game exists.
 
 ## Run Log
 
@@ -515,7 +515,7 @@ Final n=100 batches (the ones `results/suite_spec.json` uses). Seeds 0-49 replay
 | C5 gpt-5.6-sol WW | `08_batch_u3_c5_n100_20260814_171327.json` | 100 | 0 | 2026-08-14 |
 | C6 fable-5 WW | `08_batch_u4_c6_n100_20260814_175150.json` | 100 | 0 | 2026-08-14 |
 | C7 kimi-k3 WW | `08_batch_v3_c7_kimi_n100_20260814_230927.json` | 100 | 0 | 2026-08-14 |
-| C8 glm-5.2 WW | pending (OpenRouter credit) | — | — | — |
+| C8 glm-5.2 WW | dropped (see Deviations) | — | — | — |
 | C9 deepseek-v4-pro WW | `08_batch_v1_c8_dsv4_n100_20260814_214114.json` | 100 | 0 | 2026-08-14 |
 | C10 qwen3.8-max WW | `08_batch_v2_c9_qwen_n100_20260814_222858.json` | 100 | 93 | 2026-08-14 |
 | C10 substitute: qwen3.8 open weights | `08_batch_v6_c9_qwen38_n100_20260815_030038.json` | 100 | 2 | 2026-08-15 |
